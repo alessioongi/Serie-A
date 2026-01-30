@@ -14,7 +14,7 @@ import lombok.Data;
 public class Team {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private int id;
+    private Integer id;
 
     @Column(name = "name")
     private String name;
@@ -29,7 +29,7 @@ public class Team {
     private String stadiumName;
 
     @Column(name = "capacity")
-    private int stadiumCapacity;
+    private Integer stadiumCapacity;
 
     @Column(name = "logo_url",columnDefinition = "TEXT")
     private String logoUrl;
@@ -47,11 +47,11 @@ public class Team {
     private String history;
 
     @Column(name = "founded_year")
-    private int foundedYear;
+    private Integer foundedYear;
 
     @Column(name = "website_url",columnDefinition = "TEXT")
     private String websiteUrl;
 
     @Column(name = "points")
-    private int points=0;
+    private Integer points=0;
 }
