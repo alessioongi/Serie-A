@@ -31,18 +31,29 @@ public class FootballDataService {
 
     public String getStandings(){
         String url = "https://api.football-data.org/v4/competitions/SA/standings";
+        return callFootballDataApi(url);
+    }
+
+    /**
+     * Recupera le partite della Serie A.
+     * @return un JSON con tutte le partite (giocate e future)
+     */
+    public String getMatches() {
+        String url = "https://api.football-data.org/v4/competitions/SA/matches";
+        return callFootballDataApi(url);
+    }
+
+    private String callFootballDataApi(String url) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Auth-Token", apiKey);
-
         HttpEntity<String> entity = new HttpEntity<>(headers);
 
-        try{
+        try {
             ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
             return response.getBody();
-        }catch(Exception e){
+        } catch (Exception e) {
             return "Errore durante la chiamata API: " + e.getMessage();
         }
-      
     }
 
     public String updateStandings(){

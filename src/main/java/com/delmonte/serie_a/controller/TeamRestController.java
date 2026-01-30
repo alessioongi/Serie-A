@@ -44,4 +44,8 @@ public class TeamRestController {
         return footballDataService.updateStandings();
     }
 
+    @GetMapping("/matches")
+    public String getMatches() {
+        return footballDataService.getMatches();
+    }
 }
