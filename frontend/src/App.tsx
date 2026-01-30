@@ -200,7 +200,10 @@ function App() {
                                 homeTeamData?.name.toLowerCase().includes('milan') || 
                                 homeTeamData?.name.toLowerCase().includes('inter') ||
                                 homeTeamData?.name.toLowerCase().includes('parma')
-                                ? 'object-bottom' : 'object-center'
+                                ? 'object-bottom' : 
+                                homeTeamData?.name.toLowerCase().includes('genoa') || 
+                                homeTeamData?.name.toLowerCase().includes('lecce')
+                                ? 'object-top' : 'object-center'
                               }`}
                             />
                             <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/40 to-slate-900/20"></div>
@@ -307,7 +310,10 @@ function App() {
                           team.name.toLowerCase().includes('milan') || 
                           team.name.toLowerCase().includes('inter') ||
                           team.name.toLowerCase().includes('parma')
-                          ? 'object-bottom' : 'object-center'
+                          ? 'object-bottom' : 
+                          team.name.toLowerCase().includes('genoa') || 
+                          team.name.toLowerCase().includes('lecce')
+                          ? 'object-top' : 'object-center'
                         }`}
                         onError={(e) => {
                           (e.target as HTMLImageElement).style.display = 'none';
