@@ -38,4 +38,10 @@ public class TeamRestController {
     @GetMapping("/standings")
     public String getStandings() {
         return footballDataService.getStandings();
-    }}
+    }
+    @GetMapping("/update")
+    public String updateFromApi() {
+        return footballDataService.updateStandings();
+    }
+
+}
