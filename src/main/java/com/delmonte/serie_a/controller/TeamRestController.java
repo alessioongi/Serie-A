@@ -13,7 +13,7 @@ import com.delmonte.serie_a.service.FootballDataService;
 import com.delmonte.serie_a.service.TeamService;
 
 @RestController
-@CrossOrigin(origins = "http://localhost:3000")
+@CrossOrigin(origins = {"http://localhost:3000", "http://localhost:5173"})
 @RequestMapping("/api/teams")
 public class TeamRestController {
 
