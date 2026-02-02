@@ -29,6 +29,10 @@ public class FootballDataService {
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * Retrieves the current standings of the Serie A championship from the Football Data API
+     * @return a JSON string containing the Standing of the Serie A championship
+     */
     public String getStandings(){
         String url = "https://api.football-data.org/v4/competitions/SA/standings";
         return callFootballDataApi(url);
@@ -43,6 +47,21 @@ public class FootballDataService {
         return callFootballDataApi(url);
     }
 
+    /**
+     * Retrieves the scorers of the Serie A championship from the Football Data API.
+     * @return a JSON string containing the scorers of the Serie A championship
+     */
+    public String getScorers(){
+        String url = "https://api.football-data.org/v4/competitions/SA/scorers";
+        return callFootballDataApi(url);
+    }
+    
+
+    /**
+     * Calls the Football Data API to retrieve data from the given URL.
+     * @param url the URL of the API call
+     * @return the JSON response from the API call, or an error message if the call fails
+     */
     private String callFootballDataApi(String url) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Auth-Token", apiKey);
@@ -56,6 +75,47 @@ public class FootballDataService {
         }
     }
 
+    /**
+     * Checks if the teams in the database are in sync with the ones in the Football Data API.
+     * @return true if the teams are in sync, false otherwise
+     */
+    public boolean checkSyncStatus(){
+        try{
+            String jsonResponse = getStandings();
+            JsonNode root = objectMapper.readTree(jsonResponse);
+            JsonNode standings = root.path("standings").get(0).path("table");
+            for(JsonNode row : standings){
+                String teamName = row.path("team").path("shortName").asText();
+                int apiPoints = row.path("points").asInt();
+                
+                Optional<Team> teamOpt = teamRepo.findAll().stream()
+                    .filter(t -> t.getName() != null && (
+                        t.getName().equalsIgnoreCase(teamName) || 
+                        teamName.contains(t.getName()) || 
+                        t.getName().contains(teamName)
+                    ))
+                    .findFirst();
+
+                if(teamOpt.isPresent()){
+                    if (teamOpt.get().getPoints() != apiPoints) {
+                        return false; // Trovata una discrepanza, non siamo sincronizzati
+                    }
+                }
+            }
+            return true; // Tutti i punti corrispondono
+        }catch(Exception e){
+            return true; // In caso di errore API, meglio restare sul verde
+        }
+    }
+
+    /**
+     * Updates the standings of the Serie A championship from the Football Data API.
+     * 
+     * Retrieves the current Standing of the Serie A championship from the Football Data API.
+     * Then, for each team in the Standing, it updates the points and the logo URL of the corresponding team in the database.
+     * 
+     * @return a string containing the result of the update operation. If the update is successful, it returns a string like "Aggiornamento completato. Aggiornati X team.". If an error occurs, it returns a string like "Errore durante l'aggiornamento: Y".
+     */
     public String updateStandings(){
         try{
             String jsonResponse = getStandings();

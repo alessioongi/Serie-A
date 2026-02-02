@@ -39,13 +39,40 @@ public class TeamRestController {
     public String getStandings() {
         return footballDataService.getStandings();
     }
+    /**
+     * Retrieves the updated Standing of the Serie A championship from the Football Data API.
+     * The updated Standing is retrieved from the API and saved in the database.
+     * @return a JSON string containing the updated Standing of the Serie A championship
+     */
     @GetMapping("/update")
     public String updateFromApi() {
         return footballDataService.updateStandings();
     }
 
+/**
+ * Retrieves the synchronization status of the Serie A championship.
+ * @return true if the synchronization status is successful, false otherwise.
+ */
+    @GetMapping("/sync-status")
+    public boolean getSyncStatus() {
+        return footballDataService.checkSyncStatus();
+    }
+
+    /**
+     * Retrieves all matches of the Serie A championship from the Football Data API
+     * @return a JSON string containing all matches of the Serie A championship
+     */
     @GetMapping("/matches")
     public String getMatches() {
         return footballDataService.getMatches();
+    }
+
+    /**
+     * Retrieves the scorers of the Serie A championship from the Football Data API
+     * @return a JSON string containing the scorers of the Serie A championship
+     */
+    @GetMapping("/scorers")
+    public String getScorers() {
+        return footballDataService.getScorers();
     }
 }
