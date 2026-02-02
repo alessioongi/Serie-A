@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 import com.delmonte.serie_a.models.Team;
@@ -74,5 +75,14 @@ public class TeamRestController {
     @GetMapping("/scorers")
     public String getScorers() {
         return footballDataService.getScorers();
+    }
+    /**
+     * Retrieves the details of a match from the Football Data API
+     * @param matchId the ID of the match to retrieve
+     * @return a JSON string containing the details of the match
+     */
+    @GetMapping("/matches/{matchId}")
+    public String getMatchDetails(@PathVariable int matchId) {
+        return footballDataService.getMatchDetails(matchId);
     }
 }

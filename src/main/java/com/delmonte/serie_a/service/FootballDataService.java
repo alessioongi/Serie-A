@@ -56,6 +56,10 @@ public class FootballDataService {
         return callFootballDataApi(url);
     }
     
+    public String getMatchDetails(int matchId){
+        String url = "https://api.football-data.org/v4/matches/" + matchId;
+        return callFootballDataApi(url);
+    }
 
     /**
      * Calls the Football Data API to retrieve data from the given URL.
