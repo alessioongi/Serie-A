@@ -24,6 +24,10 @@ import tools.jackson.databind.ObjectMapper;
 public class FootballDataService {
     @Value("${FOOTBALL_DATA_API_KEY}")
     private String apiKey;
+    @Value("${RAPIDAPI_KEY:}")
+    private String rapidApiKey;
+    @Value("${RAPIDAPI_HOST:api-football-v1.p.rapidapi.com}")
+    private String rapidApiHost;
     @Autowired
     private TeamRepo teamRepo;
     private final RestTemplate restTemplate = new RestTemplate();
@@ -40,10 +44,14 @@ public class FootballDataService {
 
     /**
      * Recupera le partite della Serie A.
-     * @return un JSON con tutte le partite (giocate e future)
+     * @param season l'anno della stagione (es. 2024)
+     * @return un JSON con tutte le partite
      */
-    public String getMatches() {
+    public String getMatches(Integer season) {
         String url = "https://api.football-data.org/v4/competitions/SA/matches";
+        if (season != null) {
+            url += "?season=" + season;
+        }
         return callFootballDataApi(url);
     }
 
@@ -56,16 +64,152 @@ public class FootballDataService {
         return callFootballDataApi(url);
     }
     
-    public String getMatchDetails(int matchId){
-        String url = "https://api.football-data.org/v4/matches/" + matchId;
-        return callFootballDataApi(url);
+    public String getAllLeagues() {
+        try {
+            String url = "https://" + rapidApiHost + "/football-get-all-leagues-with-countries";
+            System.out.println("DEBUG: Chiamata per tutte le leghe con paesi: " + url);
+            return callRapidApi(url);
+        } catch (Exception e) {
+            return "{\"error\": \"Failed to fetch leagues: " + e.getMessage() + "\"}";
+        }
     }
 
-    /**
-     * Calls the Football Data API to retrieve data from the given URL.
-     * @param url the URL of the API call
-     * @return the JSON response from the API call, or an error message if the call fails
-     */
+    public String getMatchDetails(int matchId) {
+        try {
+            // 1. Recupera info di base da Football-Data.org
+            String fdUrl = "https://api.football-data.org/v4/matches/" + matchId;
+            String fdResponse = callFootballDataApi(fdUrl);
+            JsonNode root = objectMapper.readTree(fdResponse);
+
+            // Controllo se l'API ha restituito un errore
+            if (root.isMissingNode() || root.has("errorCode") || root.has("error")) {
+                System.out.println("ERRORE API FOOTBALL-DATA: " + fdResponse);
+                return fdResponse;
+            }
+
+            // Uso path().asText() con controllo preventivo o valore di default
+            JsonNode utcNode = root.path("utcDate");
+            if (utcNode.isMissingNode()) {
+                return "{\"error\": \"Dati match non trovati (utcDate mancante)\"}";
+            }
+            
+            String utcDate = utcNode.asText(); 
+            String date = utcDate.length() >= 10 ? utcDate.substring(0, 10) : "";
+            
+            if (date.isEmpty()) {
+                return "{\"error\": \"Formato data non valido: " + utcDate + "\"}";
+            }
+
+            int matchYear = Integer.parseInt(date.substring(0, 4));
+            int matchMonth = Integer.parseInt(date.substring(5, 7));
+            // In Serie A, la stagione 2024/25 è identificata come "2024" nelle API.
+            // Se la partita è da Gennaio a Luglio, la stagione di riferimento è l'anno precedente.
+            int seasonToUse = (matchMonth >= 8) ? matchYear : matchYear - 1;
+
+            String homeTeamName = root.path("homeTeam").path("name").asText("Sconosciuta");
+            String awayTeamName = root.path("awayTeam").path("name").asText("Sconosciuta");
+
+            System.out.println("DEBUG: Cerco " + homeTeamName + " vs " + awayTeamName + " del " + date + " (Stagione API suggerita: " + seasonToUse + ")");
+
+            // --- PROVA 1: NUOVA API (RAPIDAPI) ---
+            if (rapidApiKey != null && !rapidApiKey.isEmpty()) {
+                try {
+                    System.out.println("DEBUG: Provo Nuova API | Host: " + rapidApiHost);
+                    
+                    // Proviamo l'endpoint che restituisce tutte le partite della lega (Serie A Italiana = 55)
+                    // Questo è più affidabile per popolare i dettagli
+                    String apiFootballUrl = "https://" + rapidApiHost + "/football-get-all-matches-by-league?leagueid=55"; 
+                    
+                    System.out.println("DEBUG: URL Chiamata (Lega): " + apiFootballUrl);
+                    String response = callRapidApi(apiFootballUrl);
+                    
+                    if (response.contains("not subscribed") || response.contains("Forbidden")) {
+                        System.err.println("ERRORE SOTTOSCRIZIONE: " + response);
+                        return response;
+                    }
+
+                    System.out.println("RISPOSTA GREZZA NUOVA API: " + response);
+                    return response;
+                } catch (Exception e) {
+                    System.err.println("Errore Nuova API: " + e.getMessage());
+                }
+            }
+
+            return "{\"error\": \"Match not found on API-Football for date " + date + "\"}";
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "{\"error\": \"Error processing match details: " + e.getMessage() + "\"}";
+        }
+    }
+
+    private String callSimpleApi(String url) {
+        try {
+            return restTemplate.getForObject(url, String.class);
+        } catch (Exception e) {
+            return "{\"error\": \"API call failed: " + e.getMessage() + "\"}";
+        }
+    }
+
+    private boolean isSameMatch(String fdHome, String fdAway, String sHome, String sAway) {
+        return (checkName(fdHome, sHome) && checkName(fdAway, sAway)) || 
+               (checkName(fdHome, sAway) && checkName(fdAway, sHome)); // Per sicurezza, anche se raro
+    }
+
+    private boolean checkName(String fdName, String sName) {
+        String n1 = simplify(fdName);
+        String n2 = simplify(sName);
+        
+        // Se uno dei due nomi contiene l'altro (es. "Inter Milan" vs "Inter")
+        if (n1.contains(n2) || n2.contains(n1)) return true;
+
+        // Se le prime 3 lettere sono uguali (es. "Juve" vs "Juventus")
+        String s1 = n1.length() > 3 ? n1.substring(0, 3) : n1;
+        String s2 = n2.length() > 3 ? n2.substring(0, 3) : n2;
+        return s1.equals(s2);
+    }
+
+    private String simplify(String name) {
+        if (name == null) return "";
+        return name.toLowerCase()
+                .replace("internazionale milano", "inter")
+                .replace("internazionale", "inter")
+                .replace("milano", "")
+                .replace("fc", "")
+                .replace("ac", "")
+                .replace("as", "")
+                .replace("ssc", "")
+                .replace("us", "")
+                .replace("cfc", "")
+                .replace("hellas", "")
+                .replace("juve", "juventus")
+                .replace("ssl", "lazio")
+                .replace("calcio", "")
+                .replace("1900", "")
+                .replace("1907", "")
+                .replace("1908", "")
+                .replace("1909", "")
+                .replace("1926", "")
+                .replace(" ", "")
+                .trim();
+    }
+
+    private String callRapidApi(String url) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("x-rapidapi-key", rapidApiKey);
+        headers.set("x-rapidapi-host", rapidApiHost);
+        HttpEntity<String> entity = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+            return response.getBody();
+        } catch (Exception e) {
+            // Rimuoviamo virgolette e caratteri speciali che rompono il JSON
+            String safeError = e.getMessage().replace("\"", "'").replace("\n", " ");
+            return "{\"error\": \"RapidAPI call failed: " + safeError + "\"}";
+        }
+    }
+
     private String callFootballDataApi(String url) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Auth-Token", apiKey);
@@ -75,7 +219,8 @@ public class FootballDataService {
             ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
             return response.getBody();
         } catch (Exception e) {
-            return "Errore durante la chiamata API: " + e.getMessage();
+            String safeError = e.getMessage().replace("\"", "'").replace("\n", " ");
+            return "{\"error\": \"Football-Data API call failed: " + safeError + "\"}";
         }
     }
 

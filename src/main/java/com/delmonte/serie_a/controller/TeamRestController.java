@@ -61,11 +61,12 @@ public class TeamRestController {
 
     /**
      * Retrieves all matches of the Serie A championship from the Football Data API
-     * @return a JSON string containing all matches of the Serie A championship
+     * @param season optional season year
+     * @return a JSON string containing matches
      */
     @GetMapping("/matches")
-    public String getMatches() {
-        return footballDataService.getMatches();
+    public String getMatches(@org.springframework.web.bind.annotation.RequestParam(required = false) Integer season) {
+        return footballDataService.getMatches(season);
     }
 
     /**
@@ -84,5 +85,10 @@ public class TeamRestController {
     @GetMapping("/matches/{matchId}")
     public String getMatchDetails(@PathVariable int matchId) {
         return footballDataService.getMatchDetails(matchId);
+    }
+
+    @GetMapping("/debug/leagues")
+    public String getAllLeagues() {
+        return footballDataService.getAllLeagues();
     }
 }

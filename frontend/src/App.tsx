@@ -31,19 +31,83 @@ interface Player {
 
 interface Goal {
   minute: number;
-  extraTime?: number;
+  extraTime?: number | null;
   type: string;
-  team: { id: number; name: string };
-  scorer: { id: number; name: string };
-  assist?: { id: number; name: string };
+  team: { id: number; name: string; logo?: string };
+  player: { id: number; name: string };
+  assist?: { id: number; name: string } | null;
 }
 
 interface Substitution {
   minute: number;
-  team: { id: number; name: string };
+  extraTime?: number | null;
+  team: { id: number; name: string; logo?: string };
   playerOut: { id: number; name: string };
   playerIn: { id: number; name: string };
 }
+
+// ---------------------------------------
+
+interface FreeApiMatch {
+  id: string;
+  pageUrl: string;
+  time: string;
+  date: string;
+  status: {
+    utcTime: string;
+    finished: boolean;
+    started: boolean;
+    cancelled: boolean;
+    awarded: boolean;
+    scoreStr: string;
+    reason: string;
+  };
+  home: { name: string; logo: string; score: number };
+  away: { name: string; logo: string; score: number };
+}
+
+interface FreeApiResponse {
+  status: string;
+  response: {
+    matches: FreeApiMatch[];
+  };
+}
+
+interface AfResponse {
+  response: Array<{
+// ... rest of AfResponse ...
+    fixture: {
+      id: number;
+      date: string;
+      venue: { name: string };
+      status: { long: string };
+    };
+    league: { round: string };
+    teams: {
+      home: { id: number; name: string; logo: string };
+      away: { id: number; name: string; logo: string };
+    };
+    goals: { home: number; away: number };
+    lineups: Array<{
+      team: { id: number };
+      formation: string;
+      startXI: Array<{ player: { id: number; name: string; number: number; pos: string } }>;
+      substitutes: Array<{ player: { id: number; name: string; number: number; pos: string } }>;
+    }>;
+    statistics: Array<{
+      team: { id: number };
+      statistics: Array<{ type: string; value: string | number | null }>;
+    }>;
+    events: Array<{
+      time: { elapsed: number; extra: number | null };
+      team: { id: number; name: string };
+      player: { id: number; name: string };
+      type: string;
+      detail: string;
+    }>;
+  }>;
+}
+// ---------------------------------------
 
 interface TeamMatchInfo {
   id: number;
@@ -85,22 +149,26 @@ function App() {
   const [selectedMatchId, setSelectedMatchId] = useState<number | null>(null);
   const [matchDetails, setMatchDetails] = useState<MatchDetails | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [filterSeason, setFilterSeason] = useState<number>(2024);
+  const [filterTeam, setFilterTeam] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'FINISHED' | 'SCHEDULED' | 'TIMED' | 'IN_PLAY'>('ALL');
 
   const fetchTeams = useCallback(async () => {
     try {
-      const response = await axios.get('http://localhost:8080/api/teams');
-      const sortedTeams = response.data.sort((a: Team, b: Team) => b.points - a.points);
+      const response = await axios.get<Team[]>('http://localhost:8080/api/teams');
+      const sortedTeams = response.data.sort((a, b) => b.points - a.points);
       setTeams(sortedTeams);
     } catch (error) {
       console.error('Errore nel caricamento dei team:', error);
     }
   }, []);
 
-  const fetchMatches = useCallback(async () => {
+  const fetchMatches = useCallback(async (season?: number) => {
     try {
-      const response = await axios.get('http://localhost:8080/api/teams/matches');
+      const url = `http://localhost:8080/api/teams/matches${season ? `?season=${season}` : ''}`;
+      const response = await axios.get<{ matches: Match[] }>(url);
       // Ordiniamo le partite per data
-      const sortedMatches = response.data.matches.sort((a: Match, b: Match) => 
+      const sortedMatches = response.data.matches.sort((a, b) => 
         new Date(a.utcDate).getTime() - new Date(b.utcDate).getTime()
       );
       setMatches(sortedMatches);
@@ -111,7 +179,7 @@ function App() {
 
   const fetchScorers = useCallback(async () => {
     try {
-      const response = await axios.get('http://localhost:8080/api/teams/scorers');
+      const response = await axios.get<{ scorers: Scorer[] }>('http://localhost:8080/api/teams/scorers');
       setScorers(response.data.scorers);
     } catch (error) {
       console.error('Errore nel caricamento dei capocannonieri:', error);
@@ -119,15 +187,209 @@ function App() {
   }, []);
 
   const fetchMatchDetails = useCallback(async (id: number) => {
-    setSelectedMatchId(id); // Impostiamo subito l'ID per mostrare il layout di caricamento dettagli
+    setSelectedMatchId(id);
     setLoadingDetails(true);
+    setMatchDetails(null);
+    
     try {
-      const response = await axios.get(`http://localhost:8080/api/teams/matches/${id}`);
-      console.log('DATI RICEVUTI DALL\'API:', response.data);
-      setMatchDetails(response.data);
+      const response = await axios.get<FreeApiResponse | AfResponse | { error: string } | Record<string, unknown>>(`http://localhost:8080/api/teams/matches/${id}`);
+      console.log('DATI RICEVUTI DA BACKEND:', response.data);
+      
+      const responseData = response.data;
+
+      // Type guard per l'errore
+      if (typeof responseData === 'object' && responseData !== null && 'error' in responseData) {
+        throw new Error(String(responseData.error));
+      }
+
+      // 1. GESTIONE NUOVA API (Free API Live Football Data)
+      const isFreeApiResponse = (data: unknown): data is FreeApiResponse => {
+        return typeof data === 'object' && data !== null && 'status' in data && (data as FreeApiResponse).status === 'success' && 'response' in data && Array.isArray((data as FreeApiResponse).response.matches);
+      };
+
+      if (isFreeApiResponse(responseData)) {
+        const apiMatches = responseData.response.matches;
+        
+        // 1. Trova i nomi delle squadre che stiamo visualizzando nel sito
+        const selectedMatch = matches.find(m => m.id === id);
+        if (!selectedMatch) {
+          console.error("Match non trovato nella lista principale");
+          return;
+        }
+
+        const homeSearch = selectedMatch.homeTeam.shortName || selectedMatch.homeTeam.name;
+        const awaySearch = selectedMatch.awayTeam.shortName || selectedMatch.awayTeam.name;
+
+        console.log(`CERCO NELL'API: ${homeSearch} vs ${awaySearch}`);
+
+        // 2. Cerca il match corrispondente nella lista dell'API
+        const currentMatch = apiMatches.find((m: FreeApiMatch) => {
+          const mHome = m.home.name.toLowerCase();
+          const mAway = m.away.name.toLowerCase();
+          const hTarget = homeSearch.toLowerCase();
+          const aTarget = awaySearch.toLowerCase();
+          
+          // Verifica se i nomi si somigliano (es. "Inter" contenuto in "Inter Milan")
+          return (mHome.includes(hTarget) || hTarget.includes(mHome)) && 
+                 (mAway.includes(aTarget) || aTarget.includes(mAway));
+        });
+
+        if (!currentMatch) {
+          console.warn("Nessuna corrispondenza trovata nell'API per questo match.");
+          // Se non lo trova, non mostriamo dati sbagliati (come Aris Thessaloniki)
+          return;
+        }
+
+        console.log("MATCH TROVATO:", currentMatch);
+
+        const homeTeamData = teams.find(t => 
+          homeSearch.toLowerCase().includes(t.name.toLowerCase()) || 
+          t.name.toLowerCase().includes(homeSearch.toLowerCase())
+        );
+        const awayTeamData = teams.find(t => 
+          awaySearch.toLowerCase().includes(t.name.toLowerCase()) || 
+          t.name.toLowerCase().includes(awaySearch.toLowerCase())
+        );
+
+        // TODO: In questa API le statistiche potrebbero essere in un endpoint separato 
+        // o in un campo diverso. Per ora le inizializziamo a 0 per evitare errori.
+        const transformedData: MatchDetails = {
+            id: parseInt(currentMatch.id),
+            utcDate: currentMatch.status.utcTime || (currentMatch.date + 'T' + currentMatch.time + ':00Z'),
+            status: currentMatch.status.finished ? 'FINISHED' : (currentMatch.status.reason || 'SCHEDULED'),
+          matchday: selectedMatch?.matchday || 0, 
+          venue: homeTeamData?.stadiumName || 'Stadio non specificato',
+          homeTeam: {
+            id: homeTeamData?.id || 0,
+            name: currentMatch.home.name,
+            shortName: currentMatch.home.name,
+            crest: homeTeamData?.logoUrl || currentMatch.home.logo,
+            lineup: [],
+            bench: []
+          },
+          awayTeam: {
+            id: awayTeamData?.id || 0,
+            name: currentMatch.away.name,
+            shortName: currentMatch.away.name,
+            crest: awayTeamData?.logoUrl || currentMatch.away.logo,
+            lineup: [],
+            bench: []
+          },
+          score: {
+            fullTime: {
+              home: currentMatch.home.score,
+              away: currentMatch.away.score
+            }
+          },
+          statistics: {
+            'Possesso Palla': { home: 0, away: 0 },
+            'Tiri Totali': { home: 0, away: 0 },
+            'Tiri in Porta': { home: 0, away: 0 }
+          }
+        };
+        setMatchDetails(transformedData);
+        return;
+      }
+
+      // 2. GESTIONE VECCHIA API (API-Football)
+      const isAfResponse = (data: unknown): data is AfResponse => {
+        return typeof data === 'object' && data !== null && 'response' in data && Array.isArray((data as AfResponse).response);
+      };
+
+      if (!isAfResponse(responseData)) {
+        console.warn('Struttura dati non riconosciuta, verifica i log del backend.');
+        return;
+      }
+
+      // --- LOGICA API-FOOTBALL (Esistente) ---
+      if (responseData.response.length > 0) {
+        const af = responseData.response[0];
+        
+        const parseAfStat = (val: string | number | null | undefined): number => {
+          if (val === null || val === undefined) return 0;
+          if (typeof val === 'number') return val;
+          return parseInt(String(val).replace('%', '')) || 0;
+        };
+
+        const transformedData: MatchDetails = {
+          id: af.fixture.id,
+          utcDate: af.fixture.date,
+          status: af.fixture.status.long === 'Match Finished' ? 'FINISHED' : af.fixture.status.long,
+          matchday: parseInt(af.league.round.replace(/[^0-9]/g, '')) || 0,
+          venue: af.fixture.venue.name,
+          homeTeam: {
+            id: af.teams.home.id,
+            name: af.teams.home.name,
+            shortName: af.teams.home.name,
+            crest: af.teams.home.logo,
+            formation: af.lineups.find(l => l.team.id === af.teams.home.id)?.formation,
+            lineup: af.lineups.find(l => l.team.id === af.teams.home.id)?.startXI.map(p => ({
+              id: p.player.id,
+              name: p.player.name,
+              shirtNumber: p.player.number,
+              position: p.player.pos
+            })) || [],
+            bench: af.lineups.find(l => l.team.id === af.teams.home.id)?.substitutes.map(p => ({
+              id: p.player.id,
+              name: p.player.name,
+              shirtNumber: p.player.number,
+              position: 'R'
+            })) || []
+          },
+          awayTeam: {
+            id: af.teams.away.id,
+            name: af.teams.away.name,
+            shortName: af.teams.away.name,
+            crest: af.teams.away.logo,
+            formation: af.lineups.find(l => l.team.id === af.teams.away.id)?.formation,
+            lineup: af.lineups.find(l => l.team.id === af.teams.away.id)?.startXI.map(p => ({
+              id: p.player.id,
+              name: p.player.name,
+              shirtNumber: p.player.number,
+              position: p.player.pos
+            })) || [],
+            bench: af.lineups.find(l => l.team.id === af.teams.away.id)?.substitutes.map(p => ({
+              id: p.player.id,
+              name: p.player.name,
+              shirtNumber: p.player.number,
+              position: 'R'
+            })) || []
+          },
+          score: {
+            fullTime: {
+              home: af.goals.home,
+              away: af.goals.away
+            }
+          },
+          goals: af.events
+            .filter(e => e.type === 'Goal')
+            .map(e => ({
+              minute: e.time.elapsed,
+              extraTime: e.time.extra,
+              type: e.detail,
+              team: { id: e.team.id, name: e.team.name },
+              player: { id: e.player.id, name: e.player.name }
+            })),
+          statistics: {
+            'Possesso Palla': {
+              home: parseAfStat(af.statistics.find(s => s.team.id === af.teams.home.id)?.statistics.find(st => st.type === 'Ball Possession')?.value),
+              away: parseAfStat(af.statistics.find(s => s.team.id === af.teams.away.id)?.statistics.find(st => st.type === 'Ball Possession')?.value)
+            },
+            'Tiri Totali': {
+              home: parseAfStat(af.statistics.find(s => s.team.id === af.teams.home.id)?.statistics.find(st => st.type === 'Total Shots')?.value),
+              away: parseAfStat(af.statistics.find(s => s.team.id === af.teams.away.id)?.statistics.find(st => st.type === 'Total Shots')?.value)
+            },
+            'Tiri in Porta': {
+              home: parseAfStat(af.statistics.find(s => s.team.id === af.teams.home.id)?.statistics.find(st => st.type === 'Shots on Goal')?.value),
+              away: parseAfStat(af.statistics.find(s => s.team.id === af.teams.away.id)?.statistics.find(st => st.type === 'Shots on Goal')?.value)
+            }
+          }
+        };
+        setMatchDetails(transformedData);
+      }
     } catch (error) {
-      console.error('Errore nel caricamento dei dettagli della partita:', error);
-      setSelectedMatchId(null); // In caso di errore, torniamo alla lista
+      console.error('ERRORE:', error);
+      setMatchDetails(null);
     } finally {
       setLoadingDetails(false);
     }
@@ -135,7 +397,7 @@ function App() {
 
   const checkSyncStatus = useCallback(async () => {
     try {
-      const response = await axios.get('http://localhost:8080/api/teams/sync-status');
+      const response = await axios.get<boolean>('http://localhost:8080/api/teams/sync-status');
       setIsSynced(response.data);
     } catch (error) {
       console.error('Errore nel controllo sincronizzazione:', error);
@@ -144,14 +406,14 @@ function App() {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([fetchTeams(), fetchMatches(), fetchScorers(), checkSyncStatus()]);
+    await Promise.all([fetchTeams(), fetchMatches(filterSeason), fetchScorers(), checkSyncStatus()]);
     setLoading(false);
-  }, [fetchTeams, fetchMatches, fetchScorers, checkSyncStatus]);
+  }, [fetchTeams, fetchMatches, fetchScorers, checkSyncStatus, filterSeason]);
 
   const updateStandings = async () => {
     setUpdating(true);
     try {
-      await axios.get('http://localhost:8080/api/teams/update');
+      await axios.get<void>('http://localhost:8080/api/teams/update');
       await fetchTeams();
       await checkSyncStatus();
     } catch (error) {
@@ -164,6 +426,13 @@ function App() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    // Ricarica solo le partite quando cambia la stagione
+    if (!loading) {
+      fetchMatches(filterSeason);
+    }
+  }, [filterSeason, fetchMatches]);
 
   if (loading) {
     return (
@@ -240,7 +509,7 @@ function App() {
                                 .map((goal, idx) => (
                                   <div key={idx} className="flex items-center gap-2 text-sm text-slate-300">
                                     <Target className="h-3 w-3 text-sky-400" />
-                                    <span>{goal.scorer.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'OWN_GOAL' ? '(AU)' : ''}</span>
+                                    <span>{goal.player.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'Own Goal' ? '(AU)' : ''}</span>
                                   </div>
                                 ))}
                             </div>
@@ -249,7 +518,7 @@ function App() {
                                 .filter(g => g.team.id === matchDetails.awayTeam.id || g.team.name === matchDetails.awayTeam.name)
                                 .map((goal, idx) => (
                                   <div key={idx} className="flex items-center gap-2 justify-end text-sm text-slate-300">
-                                    <span>{goal.scorer.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'OWN_GOAL' ? '(AU)' : ''}</span>
+                                    <span>{goal.player.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'Own Goal' ? '(AU)' : ''}</span>
                                     <Target className="h-3 w-3 text-rose-400" />
                                   </div>
                                 ))}
@@ -727,14 +996,66 @@ function App() {
               </div>
             ) : activeTab === 'partite' ? (
               <div className="space-y-6">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50 backdrop-blur-sm">
                   <h2 className="text-2xl font-bold flex items-center gap-3">
                     <Trophy className="h-6 w-6 text-sky-400" />
                     Calendario Partite
                   </h2>
+                  
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Filtro Stagione */}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">Stagione</label>
+                      <select 
+                        value={filterSeason}
+                        onChange={(e) => setFilterSeason(parseInt(e.target.value))}
+                        className="bg-slate-900 border border-slate-700 text-slate-200 text-sm rounded-xl px-4 py-2 outline-none focus:border-sky-500/50 transition-all cursor-pointer"
+                      >
+                        <option value={2024}>2024 / 2025</option>
+                        <option value={2025}>2025 / 2026</option>
+                        <option value={2023}>2023 / 2024</option>
+                      </select>
+                    </div>
+
+                    {/* Filtro Stato */}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">Stato</label>
+                      <select 
+                        value={filterStatus}
+                        onChange={(e) => setFilterStatus(e.target.value as 'ALL' | 'FINISHED' | 'SCHEDULED' | 'TIMED' | 'IN_PLAY')}
+                        className="bg-slate-900 border border-slate-700 text-slate-200 text-sm rounded-xl px-4 py-2 outline-none focus:border-sky-500/50 transition-all cursor-pointer"
+                      >
+                        <option value="ALL">Tutte</option>
+                        <option value="FINISHED">Finite</option>
+                        <option value="SCHEDULED">In programma</option>
+                        <option value="IN_PLAY">In corso</option>
+                      </select>
+                    </div>
+
+                    {/* Ricerca Squadra */}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">Cerca Squadra</label>
+                      <input 
+                        type="text"
+                        placeholder="Es: Inter, Milan..."
+                        value={filterTeam}
+                        onChange={(e) => setFilterTeam(e.target.value)}
+                        className="bg-slate-900 border border-slate-700 text-slate-200 text-sm rounded-xl px-4 py-2 outline-none focus:border-sky-500/50 transition-all placeholder:text-slate-600"
+                      />
+                    </div>
+                  </div>
                 </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {matches.map((match) => {
+                  {matches
+                    .filter(match => {
+                      const matchesTeam = filterTeam === '' || 
+                        match.homeTeam.name.toLowerCase().includes(filterTeam.toLowerCase()) || 
+                        match.awayTeam.name.toLowerCase().includes(filterTeam.toLowerCase());
+                      const matchesStatus = filterStatus === 'ALL' || match.status === filterStatus;
+                      return matchesTeam && matchesStatus;
+                    })
+                    .map((match) => {
                           const homeTeamData = teams.find(t => t.name.includes(match.homeTeam.shortName) || match.homeTeam.name.includes(t.name));
                           const stadiumBg = homeTeamData?.stadiumUrl;
                           return (
