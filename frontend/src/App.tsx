@@ -19,7 +19,10 @@ interface Match {
   matchday: number;
   homeTeam: { name: string; shortName: string; crest: string };
   awayTeam: { name: string; shortName: string; crest: string };
-  score: { fullTime: { home: number; away: number } };
+  score: { 
+    fullTime: { home: number; away: number };
+    halfTime?: { home: number; away: number };
+  };
 }
 
 interface Player {
@@ -49,21 +52,29 @@ interface Substitution {
 // ---------------------------------------
 
 interface FreeApiMatch {
-  id: string;
-  pageUrl: string;
-  time: string;
-  date: string;
-  status: {
-    utcTime: string;
-    finished: boolean;
-    started: boolean;
-    cancelled: boolean;
-    awarded: boolean;
-    scoreStr: string;
-    reason: string;
+  id?: string;
+  matchId?: string;
+  pageUrl?: string;
+  time?: string;
+  date?: string;
+  status?: {
+    utcTime?: string;
+    finished?: boolean;
+    started?: boolean;
+    cancelled?: boolean;
+    awarded?: boolean;
+    scoreStr?: string;
+    reason?: string;
   };
-  home: { name: string; logo: string; score: number };
-  away: { name: string; logo: string; score: number };
+  home?: { name: string; logo: string; score: number };
+  away?: { name: string; logo: string; score: number };
+  homeTeam?: { name: string; logo: string; score: number };
+  awayTeam?: { name: string; logo: string; score: number };
+  stats?: {
+    possession?: { home: number; away: number };
+    shots?: { home: number; away: number };
+    shotsOnGoal?: { home: number; away: number };
+  };
 }
 
 interface FreeApiResponse {
@@ -136,6 +147,113 @@ interface Scorer {
   goals: number;
 }
 
+interface FreeApiEvent {
+  type: string;
+  time?: number;
+  minute?: number;
+  elapsed?: number;
+  overtime?: number | null;
+  extraTime?: number | null;
+  event_minute?: number;
+  event_extra_minute?: number | null;
+  text?: string;
+  event_type?: string;
+  isHome?: boolean;
+  side?: 'home' | 'away';
+  team_id?: number;
+  playerName?: string;
+  player?: { name: string };
+  event_player?: string;
+}
+
+interface FreeApiPlayer {
+  id?: number;
+  playerId?: number;
+  name?: string;
+  playerName?: string;
+  player?: { name: string };
+  number?: number;
+  shirtNumber?: number;
+  jerseyNumber?: number;
+  position?: string;
+  pos?: string;
+}
+
+interface FreeApiLineup {
+  formation?: string;
+  system?: string;
+  startXI?: FreeApiPlayer[];
+  startingLineup?: FreeApiPlayer[];
+  players?: FreeApiPlayer[];
+  substitutes?: FreeApiPlayer[];
+  bench?: FreeApiPlayer[];
+}
+
+interface FreeApiDetailsResponse {
+  status: string;
+  response: {
+    detail?: {
+      matchId?: string;
+      matchTimeUTCDate?: string;
+      referee?: string | { name?: string; fullName?: string };
+      events?: FreeApiEvent[];
+    };
+    referee?: string | { name?: string; fullName?: string };
+    ref?: { name?: string; fullName?: string };
+    events?: FreeApiEvent[];
+    matchEvents?: FreeApiEvent[];
+    matchHistory?: FreeApiEvent[];
+    eventlist?: FreeApiEvent[];
+    incidents?: FreeApiEvent[];
+    timeline?: FreeApiEvent[];
+    all_events?: FreeApiEvent[];
+    match_events?: FreeApiEvent[];
+    matchInfo?: {
+      referee?: string | { name?: string };
+    };
+    lineups?: {
+      home?: FreeApiLineup;
+      away?: FreeApiLineup;
+    };
+    teams?: FreeApiLineup[];
+    matchLineups?: {
+      home?: FreeApiLineup;
+      away?: FreeApiLineup;
+    };
+    matchTime?: string;
+    date?: string;
+    matchReferee?: string | { name?: string; fullName?: string };
+  };
+}
+
+interface FreeApiStatItem {
+  key?: string;
+  title?: string;
+  type?: string;
+  stats?: Array<string | number>;
+  values?: Array<string | number>;
+  value?: Array<string | number>;
+  home?: string | number;
+  away?: string | number;
+}
+
+interface FreeApiStatsGroup {
+  title?: string;
+  key?: string;
+  stats?: FreeApiStatItem[];
+  statistics?: FreeApiStatItem[];
+}
+
+interface FreeApiStatsResponse {
+  status: string;
+  response: {
+    stats?: Array<FreeApiStatsGroup | FreeApiStatItem>;
+    statistics?: Array<FreeApiStatsGroup | FreeApiStatItem>;
+    match_stats?: Array<FreeApiStatsGroup | FreeApiStatItem>;
+    data?: Array<FreeApiStatsGroup | FreeApiStatItem>;
+  };
+}
+
 function App() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
@@ -191,209 +309,403 @@ function App() {
     setLoadingDetails(true);
     setMatchDetails(null);
     
-    try {
-      const response = await axios.get<FreeApiResponse | AfResponse | { error: string } | Record<string, unknown>>(`http://localhost:8080/api/teams/matches/${id}`);
-      console.log('DATI RICEVUTI DA BACKEND:', response.data);
-      
-      const responseData = response.data;
+    const selectedMatch = matches.find(m => m.id === id);
+    if (!selectedMatch) {
+      console.error("Match non trovato localmente");
+      setLoadingDetails(false);
+      return;
+    }
 
-      // Type guard per l'errore
+    const homeSearch = selectedMatch.homeTeam.shortName || selectedMatch.homeTeam.name;
+    const awaySearch = selectedMatch.awayTeam.shortName || selectedMatch.awayTeam.name;
+    const homeTeamData = teams.find(t => homeSearch.toLowerCase().includes(t.name.toLowerCase()) || t.name.toLowerCase().includes(homeSearch.toLowerCase()));
+    const awayTeamData = teams.find(t => awaySearch.toLowerCase().includes(t.name.toLowerCase()) || t.name.toLowerCase().includes(awaySearch.toLowerCase()));
+
+    const baseMatchDetails: MatchDetails = {
+      ...selectedMatch,
+      venue: homeTeamData?.stadiumName || 'Stadio non specificato',
+      homeTeam: {
+        id: homeTeamData?.id || 0,
+        name: selectedMatch.homeTeam.name,
+        shortName: selectedMatch.homeTeam.shortName,
+        crest: homeTeamData?.logoUrl || selectedMatch.homeTeam.crest,
+        lineup: [],
+        bench: []
+      },
+      awayTeam: {
+        id: awayTeamData?.id || 0,
+        name: selectedMatch.awayTeam.name,
+        shortName: selectedMatch.awayTeam.shortName,
+        crest: awayTeamData?.logoUrl || selectedMatch.awayTeam.crest,
+        lineup: [],
+        bench: []
+      },
+      statistics: {
+        'Possesso Palla': { home: 0, away: 0 },
+        'Tiri Totali': { home: 0, away: 0 },
+        'Tiri in Porta': { home: 0, away: 0 }
+      }
+    };
+
+    setMatchDetails(baseMatchDetails);
+
+    try {
+      console.log(`DEBUG: Inizio recupero dati per match ID: ${id}`);
+      const response = await axios.get<FreeApiResponse | AfResponse | { error: string } | Record<string, unknown>>(`http://localhost:8080/api/teams/matches/${id}`);
+      const responseData = response.data;
+      console.log("DEBUG: Risposta API ricevuta:", responseData);
+
+      // Se Football-Data fallisce (es. errore 429), logghiamo ma non blocchiamo tutto se possibile
       if (typeof responseData === 'object' && responseData !== null && 'error' in responseData) {
+        console.warn("DEBUG: Backend ha restituito un errore:", responseData.error);
+        // Se l'errore è 429, lanciamo comunque l'errore per ora, ma il backend andrebbe corretto
         throw new Error(String(responseData.error));
       }
 
-      // 1. GESTIONE NUOVA API (Free API Live Football Data)
       const isFreeApiResponse = (data: unknown): data is FreeApiResponse => {
-        return typeof data === 'object' && data !== null && 'status' in data && (data as FreeApiResponse).status === 'success' && 'response' in data && Array.isArray((data as FreeApiResponse).response.matches);
+        return typeof data === 'object' && data !== null && 'status' in data && (data as FreeApiResponse).status === 'success';
       };
 
       if (isFreeApiResponse(responseData)) {
+        console.log("DEBUG: Formato identificato come FreeApiResponse");
         const apiMatches = responseData.response.matches;
+        console.log(`DEBUG: Numero match trovati nell'API: ${apiMatches?.length || 0}`);
         
-        // 1. Trova i nomi delle squadre che stiamo visualizzando nel sito
-        const selectedMatch = matches.find(m => m.id === id);
-        if (!selectedMatch) {
-          console.error("Match non trovato nella lista principale");
-          return;
-        }
+        const cleanName = (name: string) => {
+          return name.toLowerCase()
+            .replace(/^(us|ssc|ac|as|fc|cfc|ca|ud|cd)\s+/i, '')
+            .replace(/\s+(fc|ac|as|ssc|us|cfc|ca|ud|cd)$/i, '')
+            .replace(/calcio/gi, '')
+            .trim();
+        };
 
-        const homeSearch = selectedMatch.homeTeam.shortName || selectedMatch.homeTeam.name;
-        const awaySearch = selectedMatch.awayTeam.shortName || selectedMatch.awayTeam.name;
-
-        console.log(`CERCO NELL'API: ${homeSearch} vs ${awaySearch}`);
-
-        // 2. Cerca il match corrispondente nella lista dell'API
         const currentMatch = apiMatches.find((m: FreeApiMatch) => {
-          const mHome = m.home.name.toLowerCase();
-          const mAway = m.away.name.toLowerCase();
-          const hTarget = homeSearch.toLowerCase();
-          const aTarget = awaySearch.toLowerCase();
+          const homeName = m.home?.name || m.homeTeam?.name || '';
+          const awayName = m.away?.name || m.awayTeam?.name || '';
           
-          // Verifica se i nomi si somigliano (es. "Inter" contenuto in "Inter Milan")
-          return (mHome.includes(hTarget) || hTarget.includes(mHome)) && 
-                 (mAway.includes(aTarget) || aTarget.includes(mAway));
+          if (!homeName || !awayName) return false;
+
+          const mHome = cleanName(homeName);
+          const mAway = cleanName(awayName);
+          const hTarget = cleanName(homeSearch);
+          const aTarget = cleanName(awaySearch);
+          
+          const nameMatch = (mHome.includes(hTarget) || hTarget.includes(mHome)) && 
+                           (mAway.includes(aTarget) || aTarget.includes(mAway));
+          
+          return nameMatch;
         });
 
         if (!currentMatch) {
-          console.warn("Nessuna corrispondenza trovata nell'API per questo match.");
-          // Se non lo trova, non mostriamo dati sbagliati (come Aris Thessaloniki)
-          return;
+          console.log("DEBUG: Match non trovato. Nomi cercati:", { homeSearch, awaySearch });
+          if (apiMatches.length > 0) {
+            console.log("DEBUG: Esempio primo match API:", {
+              id: apiMatches[0].id || apiMatches[0].matchId,
+              home: apiMatches[0].home?.name || apiMatches[0].homeTeam?.name,
+              away: apiMatches[0].away?.name || apiMatches[0].awayTeam?.name
+            });
+          }
         }
 
-        console.log("MATCH TROVATO:", currentMatch);
+        if (currentMatch) {
+          console.log("DEBUG: Match trovato nell'elenco!", currentMatch);
+          const externalId = currentMatch.id || currentMatch.matchId;
+          
+          // Pre-carichiamo i dati che abbiamo già dalla lista
+          setMatchDetails(prev => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              score: {
+                fullTime: { 
+                  home: currentMatch.home?.score ?? currentMatch.homeTeam?.score ?? 0, 
+                  away: currentMatch.away?.score ?? currentMatch.awayTeam?.score ?? 0 
+                },
+                halfTime: { home: 0, away: 0 }
+              },
+              status: currentMatch.status?.finished ? 'FINISHED' : 'SCHEDULED'
+            };
+          });
 
-        const homeTeamData = teams.find(t => 
-          homeSearch.toLowerCase().includes(t.name.toLowerCase()) || 
-          t.name.toLowerCase().includes(homeSearch.toLowerCase())
-        );
-        const awayTeamData = teams.find(t => 
-          awaySearch.toLowerCase().includes(t.name.toLowerCase()) || 
-          t.name.toLowerCase().includes(awaySearch.toLowerCase())
-        );
-
-        // TODO: In questa API le statistiche potrebbero essere in un endpoint separato 
-        // o in un campo diverso. Per ora le inizializziamo a 0 per evitare errori.
-        const transformedData: MatchDetails = {
-            id: parseInt(currentMatch.id),
-            utcDate: currentMatch.status.utcTime || (currentMatch.date + 'T' + currentMatch.time + ':00Z'),
-            status: currentMatch.status.finished ? 'FINISHED' : (currentMatch.status.reason || 'SCHEDULED'),
-          matchday: selectedMatch?.matchday || 0, 
-          venue: homeTeamData?.stadiumName || 'Stadio non specificato',
-          homeTeam: {
-            id: homeTeamData?.id || 0,
-            name: currentMatch.home.name,
-            shortName: currentMatch.home.name,
-            crest: homeTeamData?.logoUrl || currentMatch.home.logo,
-            lineup: [],
-            bench: []
-          },
-          awayTeam: {
-            id: awayTeamData?.id || 0,
-            name: currentMatch.away.name,
-            shortName: currentMatch.away.name,
-            crest: awayTeamData?.logoUrl || currentMatch.away.logo,
-            lineup: [],
-            bench: []
-          },
-          score: {
-            fullTime: {
-              home: currentMatch.home.score,
-              away: currentMatch.away.score
-            }
-          },
-          statistics: {
-            'Possesso Palla': { home: 0, away: 0 },
-            'Tiri Totali': { home: 0, away: 0 },
-            'Tiri in Porta': { home: 0, away: 0 }
+          if (!externalId) {
+            console.warn("DEBUG: Match trovato ma ID esterno mancante. Uso solo dati base.");
+            setLoadingDetails(false);
+            return;
           }
-        };
-        setMatchDetails(transformedData);
-        return;
-      }
+          
+          console.log(`DEBUG: [MATCH FOUND] externalId: ${externalId}`);
+          console.log(`DEBUG: [API CALL] Details: http://localhost:8080/api/teams/matches/external/${externalId}`);
+          console.log(`DEBUG: [API CALL] Stats: http://localhost:8080/api/teams/matches/stats/${externalId}`);
+          
+          const [detailsRes, statsRes] = await Promise.allSettled([
+            axios.get<FreeApiDetailsResponse>(`http://localhost:8080/api/teams/matches/external/${externalId}`),
+            axios.get<FreeApiStatsResponse>(`http://localhost:8080/api/teams/matches/stats/${externalId}`)
+          ]);
+          
+          const detailsData = detailsRes.status === 'fulfilled' ? detailsRes.value.data : null;
+          const statsData = statsRes.status === 'fulfilled' ? statsRes.value.data : null;
+          
+          console.log("DEBUG: Contenuto 'data' dettagli:", detailsData);
+          console.log("DEBUG: Contenuto 'data' statistiche:", statsData);
 
-      // 2. GESTIONE VECCHIA API (API-Football)
-      const isAfResponse = (data: unknown): data is AfResponse => {
-        return typeof data === 'object' && data !== null && 'response' in data && Array.isArray((data as AfResponse).response);
-      };
+          let apiGoals: Goal[] = [];
+          let refereeName = '';
+          let matchDateFromApi = '';
+          let homeLineup: Player[] = [];
+          let awayLineup: Player[] = [];
+          let homeBench: Player[] = [];
+          let awayBench: Player[] = [];
+          let homeFormation = '';
+          let awayFormation = '';
 
-      if (!isAfResponse(responseData)) {
-        console.warn('Struttura dati non riconosciuta, verifica i log del backend.');
-        return;
-      }
+          // Cerchiamo di estrarre più dati possibili dal match della lista se mancano i dettagli
+          const scoreHome = currentMatch.home?.score ?? currentMatch.homeTeam?.score;
+          const scoreAway = currentMatch.away?.score ?? currentMatch.awayTeam?.score;
 
-      // --- LOGICA API-FOOTBALL (Esistente) ---
-      if (responseData.response.length > 0) {
-        const af = responseData.response[0];
-        
-        const parseAfStat = (val: string | number | null | undefined): number => {
-          if (val === null || val === undefined) return 0;
-          if (typeof val === 'number') return val;
-          return parseInt(String(val).replace('%', '')) || 0;
-        };
-
-        const transformedData: MatchDetails = {
-          id: af.fixture.id,
-          utcDate: af.fixture.date,
-          status: af.fixture.status.long === 'Match Finished' ? 'FINISHED' : af.fixture.status.long,
-          matchday: parseInt(af.league.round.replace(/[^0-9]/g, '')) || 0,
-          venue: af.fixture.venue.name,
-          homeTeam: {
-            id: af.teams.home.id,
-            name: af.teams.home.name,
-            shortName: af.teams.home.name,
-            crest: af.teams.home.logo,
-            formation: af.lineups.find(l => l.team.id === af.teams.home.id)?.formation,
-            lineup: af.lineups.find(l => l.team.id === af.teams.home.id)?.startXI.map(p => ({
-              id: p.player.id,
-              name: p.player.name,
-              shirtNumber: p.player.number,
-              position: p.player.pos
-            })) || [],
-            bench: af.lineups.find(l => l.team.id === af.teams.home.id)?.substitutes.map(p => ({
-              id: p.player.id,
-              name: p.player.name,
-              shirtNumber: p.player.number,
-              position: 'R'
-            })) || []
-          },
-          awayTeam: {
-            id: af.teams.away.id,
-            name: af.teams.away.name,
-            shortName: af.teams.away.name,
-            crest: af.teams.away.logo,
-            formation: af.lineups.find(l => l.team.id === af.teams.away.id)?.formation,
-            lineup: af.lineups.find(l => l.team.id === af.teams.away.id)?.startXI.map(p => ({
-              id: p.player.id,
-              name: p.player.name,
-              shirtNumber: p.player.number,
-              position: p.player.pos
-            })) || [],
-            bench: af.lineups.find(l => l.team.id === af.teams.away.id)?.substitutes.map(p => ({
-              id: p.player.id,
-              name: p.player.name,
-              shirtNumber: p.player.number,
-              position: 'R'
-            })) || []
-          },
-          score: {
-            fullTime: {
-              home: af.goals.home,
-              away: af.goals.away
+          if (detailsData?.response) {
+            const resp = detailsData.response;
+            
+            // 1. Estrai arbitro
+            const refData = resp.referee || resp.ref || resp.detail?.referee || resp.matchReferee;
+            if (typeof refData === 'string') {
+              refereeName = refData;
+            } else if (refData && typeof refData === 'object' && ('name' in refData || 'fullName' in refData)) {
+              const r = refData as { name?: string; fullName?: string };
+              refereeName = r.name || r.fullName || '';
             }
-          },
-          goals: af.events
-            .filter(e => e.type === 'Goal')
-            .map(e => ({
-              minute: e.time.elapsed,
-              extraTime: e.time.extra,
-              type: e.detail,
-              team: { id: e.team.id, name: e.team.name },
-              player: { id: e.player.id, name: e.player.name }
-            })),
-          statistics: {
-            'Possesso Palla': {
-              home: parseAfStat(af.statistics.find(s => s.team.id === af.teams.home.id)?.statistics.find(st => st.type === 'Ball Possession')?.value),
-              away: parseAfStat(af.statistics.find(s => s.team.id === af.teams.away.id)?.statistics.find(st => st.type === 'Ball Possession')?.value)
-            },
-            'Tiri Totali': {
-              home: parseAfStat(af.statistics.find(s => s.team.id === af.teams.home.id)?.statistics.find(st => st.type === 'Total Shots')?.value),
-              away: parseAfStat(af.statistics.find(s => s.team.id === af.teams.away.id)?.statistics.find(st => st.type === 'Total Shots')?.value)
-            },
-            'Tiri in Porta': {
-              home: parseAfStat(af.statistics.find(s => s.team.id === af.teams.home.id)?.statistics.find(st => st.type === 'Shots on Goal')?.value),
-              away: parseAfStat(af.statistics.find(s => s.team.id === af.teams.away.id)?.statistics.find(st => st.type === 'Shots on Goal')?.value)
+            if (!refereeName && resp.matchInfo?.referee) {
+              const miRef = resp.matchInfo.referee;
+              refereeName = typeof miRef === 'string' ? miRef : (miRef.name || '');
+            }
+
+            // 2. Estrai data
+            matchDateFromApi = resp.detail?.matchTimeUTCDate || resp.matchTime || resp.date || '';
+
+            // 3. Estrai eventi (gol)
+            const possibleEvents = [
+              resp.events,
+              resp.detail?.events,
+              resp.matchEvents,
+              resp.matchHistory,
+              resp.eventlist,
+              resp.incidents,
+              resp.timeline,
+              resp.all_events,
+              resp.match_events
+            ];
+            
+            const events = possibleEvents.find(e => Array.isArray(e)) as FreeApiEvent[] | undefined;
+            
+            if (events) {
+              console.log(`DEBUG: Trovati ${events.length} eventi nel match`);
+              apiGoals = events
+                .filter(e => {
+                  const type = (e.type || e.text || e.event_type || '').toLowerCase();
+                  return type.includes('goal') || type.includes('scored');
+                })
+                .map(e => ({
+                  minute: e.time || e.minute || e.elapsed || e.event_minute || 0,
+                  extraTime: e.overtime || e.extraTime || e.event_extra_minute || null,
+                  type: e.text || e.type || e.event_type || 'Goal',
+                  team: { 
+                    id: (e.isHome || e.side === 'home' || e.team_id === baseMatchDetails.homeTeam.id) ? baseMatchDetails.homeTeam.id : baseMatchDetails.awayTeam.id, 
+                    name: (e.isHome || e.side === 'home' || e.team_id === baseMatchDetails.homeTeam.id) ? baseMatchDetails.homeTeam.name : baseMatchDetails.awayTeam.name 
+                  },
+                  player: { id: 0, name: e.playerName || e.player?.name || e.event_player || 'Giocatore' }
+                }));
+            }
+
+            // 4. Estrai Formazioni (Lineups)
+            const lineups = resp.lineups || resp.teams || resp.matchLineups;
+            if (lineups) {
+              let hL: FreeApiLineup = {};
+              let aL: FreeApiLineup = {};
+
+              if (!Array.isArray(lineups)) {
+                hL = lineups.home || {};
+                aL = lineups.away || {};
+              } else if (lineups.length >= 2) {
+                hL = lineups[0] || {};
+                aL = lineups[1] || {};
+              }
+              
+              homeFormation = hL.formation || hL.system || '';
+              awayFormation = aL.formation || aL.system || '';
+
+              const extractPlayers = (list: FreeApiPlayer[] | undefined) => {
+                if (!list || !Array.isArray(list)) return [];
+                return list.map(p => ({
+                  id: p.id || p.playerId || 0,
+                  name: p.name || p.playerName || p.player?.name || 'Giocatore',
+                  shirtNumber: p.number || p.shirtNumber || p.jerseyNumber || 0,
+                  position: p.position || p.pos || ''
+                }));
+              };
+
+              homeLineup = extractPlayers(hL.startXI || hL.startingLineup || hL.players);
+              awayLineup = extractPlayers(aL.startXI || aL.startingLineup || aL.players);
+              homeBench = extractPlayers(hL.substitutes || hL.bench);
+              awayBench = extractPlayers(aL.substitutes || aL.bench);
             }
           }
-        };
-        setMatchDetails(transformedData);
+
+          const findStat = (keys: string[]) => {
+            if (!statsData || !statsData.response) return { home: 0, away: 0 };
+            const resp = statsData.response;
+            const statsSource = resp.stats || resp.statistics || resp.match_stats || resp.data;
+
+            if (!statsSource || !Array.isArray(statsSource)) return { home: 0, away: 0 };
+            
+            const lowerKeys = keys.map(k => k.toLowerCase());
+            
+            const extractValuesLocal = (stat: FreeApiStatItem) => {
+              const parseVal = (val: string | number | null | undefined) => {
+                if (val === null || val === undefined) return 0;
+                if (typeof val === 'number') return val;
+                const match = String(val).match(/(\d+)/);
+                return match ? Number(match[1]) : 0;
+              };
+
+              if (stat.home !== undefined || stat.away !== undefined) {
+                return { home: parseVal(stat.home), away: parseVal(stat.away) };
+              }
+
+              const vals = stat.stats || stat.values || stat.value || [];
+              if (Array.isArray(vals) && vals.length >= 2) {
+                return { home: parseVal(vals[0]), away: parseVal(vals[1]) };
+              }
+              return { home: 0, away: 0 };
+            };
+
+            for (const item of statsSource) {
+              if ('stats' in item || 'statistics' in item) {
+                const group = item as FreeApiStatsGroup;
+                const items = group.stats || group.statistics;
+                if (Array.isArray(items)) {
+                  const found = items.find(s => {
+                    const key = s.key || s.title || s.type || '';
+                    return lowerKeys.includes(key.toLowerCase());
+                  });
+                  if (found) return extractValuesLocal(found);
+                }
+              } else {
+                const s = item as FreeApiStatItem;
+                const key = s.key || s.title || s.type || '';
+                if (lowerKeys.includes(key.toLowerCase())) {
+                   return extractValuesLocal(s);
+                }
+              }
+            }
+            return { home: 0, away: 0 };
+          };
+
+          setMatchDetails(prev => {
+            if (!prev) return null;
+            
+            return {
+              ...prev,
+              utcDate: matchDateFromApi || prev.utcDate,
+              referees: refereeName ? [{ name: refereeName }] : (prev.referees || []),
+              goals: apiGoals.length > 0 ? apiGoals : (prev.goals || []),
+              homeTeam: {
+                ...prev.homeTeam,
+                formation: homeFormation || prev.homeTeam.formation,
+                lineup: homeLineup.length > 0 ? homeLineup : (prev.homeTeam.lineup || []),
+                bench: homeBench.length > 0 ? homeBench : (prev.homeTeam.bench || [])
+              },
+              awayTeam: {
+                ...prev.awayTeam,
+                formation: awayFormation || prev.awayTeam.formation,
+                lineup: awayLineup.length > 0 ? awayLineup : (prev.awayTeam.lineup || []),
+                bench: awayBench.length > 0 ? awayBench : (prev.awayTeam.bench || [])
+              },
+              score: {
+                fullTime: { 
+                  home: scoreHome !== undefined ? scoreHome : (prev.score?.fullTime?.home ?? 0), 
+                  away: scoreAway !== undefined ? scoreAway : (prev.score?.fullTime?.away ?? 0)
+                },
+                halfTime: prev.score?.halfTime || { home: 0, away: 0 }
+              },
+              statistics: {
+                'Possesso Palla': findStat(['BallPossesion', 'Possession', 'Ball possession']),
+                'Tiri Totali': findStat(['ShotsTotal', 'Total shots', 'Shots']),
+                'Tiri in Porta': findStat(['ShotsOnGoal', 'Shots on target', 'On Target']),
+                'Falli Commessi': findStat(['fouls', 'Fouls committed']),
+                'Calci d\'angolo': findStat(['corners', 'Corners']),
+                'Cartellini Gialli': findStat(['yellow_cards', 'Yellow cards']),
+                'Cartellini Rossi': findStat(['red_cards', 'Red cards'])
+              }
+            };
+          });
+          setLoadingDetails(false);
+        }
+      } else if (typeof responseData === 'object' && responseData !== null && 'response' in responseData && Array.isArray((responseData as AfResponse).response)) {
+        const af = (responseData as AfResponse).response[0];
+        if (af) {
+          const parseAfStat = (val: string | number | null | undefined): number => {
+            if (val === null || val === undefined) return 0;
+            if (typeof val === 'number') return val;
+            return parseInt(String(val).replace('%', '')) || 0;
+          };
+
+          const homeLineup = af.lineups?.find(l => l.team.id === af.teams.home.id);
+          const awayLineup = af.lineups?.find(l => l.team.id === af.teams.away.id);
+
+          const homeStats = af.statistics?.find(s => s.team.id === af.teams.home.id)?.statistics;
+          const awayStats = af.statistics?.find(s => s.team.id === af.teams.away.id)?.statistics;
+
+          const findAfStat = (type: string) => ({
+            home: parseAfStat(homeStats?.find(st => st.type === type)?.value),
+            away: parseAfStat(awayStats?.find(st => st.type === type)?.value)
+          });
+
+          setMatchDetails(prev => prev ? {
+            ...prev,
+            homeTeam: {
+              ...prev.homeTeam,
+              formation: homeLineup?.formation,
+              lineup: homeLineup?.startXI.map(p => ({ id: p.player.id, name: p.player.name, shirtNumber: p.player.number, position: p.player.pos })) || [],
+              bench: homeLineup?.substitutes.map(p => ({ id: p.player.id, name: p.player.name, shirtNumber: p.player.number, position: 'R' })) || []
+            },
+            awayTeam: {
+              ...prev.awayTeam,
+              formation: awayLineup?.formation,
+              lineup: awayLineup?.startXI.map(p => ({ id: p.player.id, name: p.player.name, shirtNumber: p.player.number, position: p.player.pos })) || [],
+              bench: awayLineup?.substitutes.map(p => ({ id: p.player.id, name: p.player.name, shirtNumber: p.player.number, position: 'R' })) || []
+            },
+            goals: af.events?.filter(e => e.type === 'Goal').map(e => ({ 
+              minute: e.time.elapsed, 
+              extraTime: e.time.extra, 
+              type: e.detail, 
+              team: { id: e.team.id, name: e.team.name }, 
+              player: { id: e.player.id, name: e.player.name } 
+            })) || [],
+            statistics: {
+              'Possesso Palla': findAfStat('Ball Possession'),
+              'Tiri Totali': findAfStat('Total Shots'),
+              'Tiri in Porta': findAfStat('Shots on Goal'),
+              'Falli Commessi': findAfStat('Fouls'),
+              'Calci d\'angolo': findAfStat('Corner Kicks'),
+              'Cartellini Gialli': findAfStat('Yellow Cards'),
+              'Cartellini Rossi': findAfStat('Red Cards')
+            }
+          } : null);
+        }
       }
     } catch (error) {
-      console.error('ERRORE:', error);
-      setMatchDetails(null);
+      console.error('ERRORE CRITICO nel caricamento dettagli:', error);
+      if (axios.isAxiosError(error)) {
+        console.error('Dettagli errore Axios:', {
+          status: error.response?.status,
+          data: error.response?.data,
+          message: error.message
+        });
+      }
+      console.warn('Dettagli extra non disponibili (limite API o match futuro)', error);
     } finally {
       setLoadingDetails(false);
     }
-  }, []);
+  }, [matches, teams]);
 
   const checkSyncStatus = useCallback(async () => {
     try {

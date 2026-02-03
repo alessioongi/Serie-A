@@ -91,4 +91,14 @@ public class TeamRestController {
     public String getAllLeagues() {
         return footballDataService.getAllLeagues();
     }
+
+    @GetMapping("/matches/external/{externalId}")
+    public String getExternalMatchDetails(@PathVariable String externalId) {
+        return footballDataService.getExternalMatchDetails(externalId);
+    }
+
+    @GetMapping("/matches/stats/{eventId}")
+    public String getMatchStatistics(@PathVariable String eventId) {
+        return footballDataService.getMatchStatistics(eventId);
+    }
 }

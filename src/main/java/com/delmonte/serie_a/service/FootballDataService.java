@@ -28,10 +28,25 @@ public class FootballDataService {
     private String rapidApiKey;
     @Value("${RAPIDAPI_HOST:api-football-v1.p.rapidapi.com}")
     private String rapidApiHost;
+    @Value("${RAPIDAPI_LEAGUE_ID:55}")
+    private String defaultLeagueId;
+    
     @Autowired
     private TeamRepo teamRepo;
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // Mappatura codici Football-Data.org -> ID RapidAPI
+    private String getRapidApiLeagueId(String competitionCode) {
+        return switch (competitionCode) {
+            case "SA" -> "55";  // Serie A (confermato 55)
+            case "PL" -> "39";  // Premier League
+            case "BL1" -> "78"; // Bundesliga
+            case "PD" -> "140"; // La Liga
+            case "FL1" -> "61"; // Ligue 1
+            default -> defaultLeagueId;
+        };
+    }
 
     /**
      * Retrieves the current standings of the Serie A championship from the Football Data API
@@ -66,8 +81,8 @@ public class FootballDataService {
     
     public String getAllLeagues() {
         try {
-            String url = "https://" + rapidApiHost + "/football-get-all-leagues-with-countries";
-            System.out.println("DEBUG: Chiamata per tutte le leghe con paesi: " + url);
+            String url = "https://" + rapidApiHost + "/football-get-all-leagues";
+            System.out.println("DEBUG: Chiamata per tutte le leghe: " + url);
             return callRapidApi(url);
         } catch (Exception e) {
             return "{\"error\": \"Failed to fetch leagues: " + e.getMessage() + "\"}";
@@ -83,8 +98,9 @@ public class FootballDataService {
 
             // Controllo se l'API ha restituito un errore
             if (root.isMissingNode() || root.has("errorCode") || root.has("error")) {
-                System.out.println("ERRORE API FOOTBALL-DATA: " + fdResponse);
-                return fdResponse;
+                System.out.println("AVVISO API FOOTBALL-DATA (Procedo comunque con RapidAPI): " + fdResponse);
+                // Se Football-Data fallisce, proviamo comunque con la lega di default (Serie A = 55)
+                return tryRapidApiFallback("55");
             }
 
             // Uso path().asText() con controllo preventivo o valore di default
@@ -106,9 +122,13 @@ public class FootballDataService {
             // Se la partita è da Gennaio a Luglio, la stagione di riferimento è l'anno precedente.
             int seasonToUse = (matchMonth >= 8) ? matchYear : matchYear - 1;
 
+            String competitionCode = root.path("competition").path("code").asText("SA");
+            String leagueIdToUse = getRapidApiLeagueId(competitionCode);
+            
             String homeTeamName = root.path("homeTeam").path("name").asText("Sconosciuta");
             String awayTeamName = root.path("awayTeam").path("name").asText("Sconosciuta");
 
+            System.out.println("DEBUG: Competizione: " + competitionCode + " -> League ID RapidAPI: " + leagueIdToUse);
             System.out.println("DEBUG: Cerco " + homeTeamName + " vs " + awayTeamName + " del " + date + " (Stagione API suggerita: " + seasonToUse + ")");
 
             // --- PROVA 1: NUOVA API (RAPIDAPI) ---
@@ -116,11 +136,9 @@ public class FootballDataService {
                 try {
                     System.out.println("DEBUG: Provo Nuova API | Host: " + rapidApiHost);
                     
-                    // Proviamo l'endpoint che restituisce tutte le partite della lega (Serie A Italiana = 55)
-                    // Questo è più affidabile per popolare i dettagli
-                    String apiFootballUrl = "https://" + rapidApiHost + "/football-get-all-matches-by-league?leagueid=55"; 
+                    // Proviamo l'endpoint che restituisce tutte le partite della lega
+                    String apiFootballUrl = "https://" + rapidApiHost + "/football-get-all-matches-by-league?leagueid=" + leagueIdToUse; 
                     
-                    System.out.println("DEBUG: URL Chiamata (Lega): " + apiFootballUrl);
                     String response = callRapidApi(apiFootballUrl);
                     
                     if (response.contains("not subscribed") || response.contains("Forbidden")) {
@@ -128,7 +146,7 @@ public class FootballDataService {
                         return response;
                     }
 
-                    System.out.println("RISPOSTA GREZZA NUOVA API: " + response);
+                    System.out.println("DEBUG: Recuperati match (Response size: " + response.length() + ")");
                     return response;
                 } catch (Exception e) {
                     System.err.println("Errore Nuova API: " + e.getMessage());
@@ -140,6 +158,28 @@ public class FootballDataService {
         } catch (Exception e) {
             e.printStackTrace();
             return "{\"error\": \"Error processing match details: " + e.getMessage() + "\"}";
+        }
+    }
+
+    public String getMatchStatistics(String eventId) {
+        try {
+            // Utilizziamo l'endpoint suggerito dal playground che sembra più completo
+            String url = "https://" + rapidApiHost + "/football-get-match-event-all-stats?eventid=" + eventId;
+            System.out.println("DEBUG: Recupero statistiche match (Event ID): " + url);
+            return callRapidApi(url);
+        } catch (Exception e) {
+            return "{\"error\": \"Failed to fetch statistics: " + e.getMessage() + "\"}";
+        }
+    }
+
+    public String getExternalMatchDetails(String externalMatchId) {
+        try {
+            // Utilizziamo l'endpoint suggerito dal playground che restituisce sia eventi che statistiche
+            String url = "https://" + rapidApiHost + "/football-get-match-event-all-stats?eventid=" + externalMatchId;
+            System.out.println("DEBUG: Recupero dettagli completi match tramite eventid: " + url);
+            return callRapidApi(url);
+        } catch (Exception e) {
+            return "{\"error\": \"Failed to fetch match details: " + e.getMessage() + "\"}";
         }
     }
 
@@ -192,6 +232,19 @@ public class FootballDataService {
                 .replace("1926", "")
                 .replace(" ", "")
                 .trim();
+    }
+
+    private String tryRapidApiFallback(String leagueId) {
+        if (rapidApiKey != null && !rapidApiKey.isEmpty()) {
+            try {
+                String url = "https://" + rapidApiHost + "/football-get-all-matches-by-league?leagueid=" + leagueId;
+                System.out.println("DEBUG: Fallback su RapidAPI | URL: " + url);
+                return callRapidApi(url);
+            } catch (Exception e) {
+                return "{\"error\": \"RapidAPI fallback failed: " + e.getMessage() + "\"}";
+            }
+        }
+        return "{\"error\": \"RapidAPI key not configured\"}";
     }
 
     private String callRapidApi(String url) {
