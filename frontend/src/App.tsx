@@ -368,10 +368,11 @@ function App() {
 
       if (isFreeApiResponse(responseData)) {
         console.log("DEBUG: Formato identificato come FreeApiResponse");
-        const apiMatches = responseData.response.matches;
-        console.log(`DEBUG: Numero match trovati nell'API: ${apiMatches?.length || 0}`);
+        const apiMatches = responseData.response?.matches || [];
+        console.log(`DEBUG: Numero match trovati nell'API: ${apiMatches.length}`);
         
         const cleanName = (name: string) => {
+          if (typeof name !== 'string') return '';
           return name.toLowerCase()
             .replace(/^(us|ssc|ac|as|fc|cfc|ca|ud|cd)\s+/i, '')
             .replace(/\s+(fc|ac|as|ssc|us|cfc|ca|ud|cd)$/i, '')
