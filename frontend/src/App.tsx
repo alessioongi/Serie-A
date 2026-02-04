@@ -642,10 +642,11 @@ function App() {
               },
               statistics: {
                 'Possesso Palla': findStat(['BallPossesion', 'Possession', 'Ball possession', 'Possession %']),
-                'Tiri Totali': findStat(['ShotsTotal', 'Total shots', 'Shots', 'Tiri', 'Tiri Totali', 'Total_Shots']),
-                'Tiri in Porta': findStat(['ShotsOnGoal', 'Shots on target', 'On Target', 'Shots_on_Goal', 'Tiri in porta']),
+                'Tiri Totali': findStat(['total_shots', 'ShotsTotal', 'Total shots', 'Shots', 'Tiri', 'Tiri Totali', 'Total_Shots']),
+                'Tiri in Porta': findStat(['ShotsOnTarget', 'ShotsOnGoal', 'Shots on target', 'On Target', 'Shots_on_Goal', 'Tiri in porta']),
                 'Falli Commessi': findStat(['fouls', 'Fouls committed', 'Falli', 'Fouls_Committed']),
-                'Calci d\'angolo': findStat(['corners', 'Corners', 'Corner Kicks', 'Calci d\'angolo', 'Corner_Kicks']),
+                'Calci d\'angolo': findStat(['corners', 'Corner Kicks', 'Calci d\'angolo', 'Corner_Kicks']),
+                'Fuorigioco': findStat(['Offsides', 'Offside']),
                 'Cartellini Gialli': findStat(['yellow_cards', 'Yellow cards', 'Yellow_Cards']),
                 'Cartellini Rossi': findStat(['red_cards', 'Red cards', 'Red_Cards'])
               }
