@@ -230,9 +230,10 @@ interface FreeApiStatItem {
   key?: string;
   title?: string;
   type?: string;
+  name?: string;
   stats?: Array<string | number>;
   values?: Array<string | number>;
-  value?: Array<string | number>;
+  value?: string | number | Array<string | number>;
   home?: string | number;
   away?: string | number;
 }
@@ -240,8 +241,10 @@ interface FreeApiStatItem {
 interface FreeApiStatsGroup {
   title?: string;
   key?: string;
+  name?: string;
   stats?: FreeApiStatItem[];
   statistics?: FreeApiStatItem[];
+  items?: FreeApiStatItem[];
 }
 
 interface FreeApiStatsResponse {
@@ -250,6 +253,7 @@ interface FreeApiStatsResponse {
     stats?: Array<FreeApiStatsGroup | FreeApiStatItem>;
     statistics?: Array<FreeApiStatsGroup | FreeApiStatItem>;
     match_stats?: Array<FreeApiStatsGroup | FreeApiStatItem>;
+    match_statistics?: Array<FreeApiStatsGroup | FreeApiStatItem>;
     data?: Array<FreeApiStatsGroup | FreeApiStatItem>;
   };
 }
@@ -553,45 +557,54 @@ function App() {
           const findStat = (keys: string[]) => {
             if (!statsData || !statsData.response) return { home: 0, away: 0 };
             const resp = statsData.response;
-            const statsSource = resp.stats || resp.statistics || resp.match_stats || resp.data;
+            const statsSource = resp.stats || resp.statistics || resp.match_stats || resp.data || resp.match_statistics;
 
             if (!statsSource || !Array.isArray(statsSource)) return { home: 0, away: 0 };
             
             const lowerKeys = keys.map(k => k.toLowerCase());
             
             const extractValuesLocal = (stat: FreeApiStatItem) => {
-              const parseVal = (val: string | number | null | undefined) => {
+              const parseVal = (val: string | number | null | undefined | Array<string | number>): number => {
                 if (val === null || val === undefined) return 0;
-                if (typeof val === 'number') return val;
-                const match = String(val).match(/(\d+)/);
-                return match ? Number(match[1]) : 0;
+                
+                // Se è un array, prendiamo il primo elemento
+                const actualVal = Array.isArray(val) ? val[0] : val;
+                
+                if (typeof actualVal === 'number') return actualVal;
+                
+                const clean = String(actualVal).replace(/[^\d.]/g, '');
+                return clean ? parseFloat(clean) : 0;
               };
 
               if (stat.home !== undefined || stat.away !== undefined) {
                 return { home: parseVal(stat.home), away: parseVal(stat.away) };
               }
 
-              const vals = stat.stats || stat.values || stat.value || [];
+              const vals = stat.stats || stat.values || (Array.isArray(stat.value) ? stat.value : []);
               if (Array.isArray(vals) && vals.length >= 2) {
                 return { home: parseVal(vals[0]), away: parseVal(vals[1]) };
               }
+              
+              if (stat.value !== undefined && !Array.isArray(stat.value)) {
+                return { home: parseVal(stat.value), away: 0 };
+              }
+
               return { home: 0, away: 0 };
             };
 
             for (const item of statsSource) {
-              if ('stats' in item || 'statistics' in item) {
-                const group = item as FreeApiStatsGroup;
-                const items = group.stats || group.statistics;
-                if (Array.isArray(items)) {
-                  const found = items.find(s => {
-                    const key = s.key || s.title || s.type || '';
-                    return lowerKeys.includes(key.toLowerCase());
-                  });
-                  if (found) return extractValuesLocal(found);
-                }
+              const group = item as FreeApiStatsGroup;
+              const subItems = group.stats || group.statistics || group.items;
+              
+              if (Array.isArray(subItems)) {
+                const found = subItems.find(s => {
+                  const key = s.key || s.title || s.type || s.name || '';
+                  return lowerKeys.includes(key.toLowerCase());
+                });
+                if (found) return extractValuesLocal(found);
               } else {
                 const s = item as FreeApiStatItem;
-                const key = s.key || s.title || s.type || '';
+                const key = s.key || s.title || s.type || s.name || '';
                 if (lowerKeys.includes(key.toLowerCase())) {
                    return extractValuesLocal(s);
                 }
@@ -628,13 +641,13 @@ function App() {
                 halfTime: prev.score?.halfTime || { home: 0, away: 0 }
               },
               statistics: {
-                'Possesso Palla': findStat(['BallPossesion', 'Possession', 'Ball possession']),
-                'Tiri Totali': findStat(['ShotsTotal', 'Total shots', 'Shots']),
-                'Tiri in Porta': findStat(['ShotsOnGoal', 'Shots on target', 'On Target']),
-                'Falli Commessi': findStat(['fouls', 'Fouls committed']),
-                'Calci d\'angolo': findStat(['corners', 'Corners']),
-                'Cartellini Gialli': findStat(['yellow_cards', 'Yellow cards']),
-                'Cartellini Rossi': findStat(['red_cards', 'Red cards'])
+                'Possesso Palla': findStat(['BallPossesion', 'Possession', 'Ball possession', 'Possession %']),
+                'Tiri Totali': findStat(['ShotsTotal', 'Total shots', 'Shots', 'Tiri', 'Tiri Totali', 'Total_Shots']),
+                'Tiri in Porta': findStat(['ShotsOnGoal', 'Shots on target', 'On Target', 'Shots_on_Goal', 'Tiri in porta']),
+                'Falli Commessi': findStat(['fouls', 'Fouls committed', 'Falli', 'Fouls_Committed']),
+                'Calci d\'angolo': findStat(['corners', 'Corners', 'Corner Kicks', 'Calci d\'angolo', 'Corner_Kicks']),
+                'Cartellini Gialli': findStat(['yellow_cards', 'Yellow cards', 'Yellow_Cards']),
+                'Cartellini Rossi': findStat(['red_cards', 'Red cards', 'Red_Cards'])
               }
             };
           });
