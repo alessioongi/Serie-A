@@ -197,15 +197,35 @@ public class FootballDataService {
             
             // TENTATIVO DI RECUPERO MARCATORI ESTERNI (SCRAPING FALLBACK)
             if (!fdRoot.has("goals") || fdRoot.path("goals").size() == 0) {
-                System.out.println("DEBUG: Marcatori assenti su API. Tento recupero esterno tramite scraping...");
-                try {
-                    ArrayNode scrapedGoals = scrapeScorers(homeTeam, awayTeam, date);
-                    if (scrapedGoals.size() > 0) {
-                        ((ObjectNode)fdRoot).set("goals", scrapedGoals);
-                        System.out.println("DEBUG: Recuperati " + scrapedGoals.size() + " gol tramite scraping!");
+                // Controllo se è uno 0-0 confermato
+                JsonNode score = fdRoot.path("score").path("fullTime");
+                if (score.has("home") && score.has("away") && 
+                    score.path("home").asInt() == 0 && score.path("away").asInt() == 0) {
+                    System.out.println("DEBUG: Match terminato 0-0. Salto scraping marcatori.");
+                } else {
+                    System.out.println("DEBUG: Marcatori assenti su API. Tento recupero esterno tramite scraping...");
+                    try {
+                        JsonNode fullScore = fdRoot.path("score").path("fullTime");
+                        int hScore = fullScore.path("home").asInt(0);
+                        int aScore = fullScore.path("away").asInt(0);
+                        int matchday = fdRoot.path("matchday").asInt(0);
+                        ObjectNode scrapedData = scrapeScorers(homeTeam, awayTeam, date, hScore, aScore, matchday);
+                    if (scrapedData.has("goals")) {
+                        ((ObjectNode)fdRoot).set("goals", scrapedData.get("goals"));
                     }
-                } catch (Exception e) {
-                    System.err.println("Errore durante lo scraping: " + e.getMessage());
+                    if (scrapedData.has("substitutions")) {
+                        ((ObjectNode)fdRoot).set("substitutions", scrapedData.get("substitutions"));
+                    }
+                    if (scrapedData.has("cards")) {
+                        ((ObjectNode)fdRoot).set("cards", scrapedData.get("cards"));
+                    }
+                    if (scrapedData.has("injuries")) {
+                        ((ObjectNode)fdRoot).set("injuries", scrapedData.get("injuries"));
+                    }
+                        System.out.println("DEBUG: Recuperati dati extra tramite scraping!");
+                    } catch (Exception e) {
+                        System.err.println("Errore durante lo scraping: " + e.getMessage());
+                    }
                 }
             }
             
@@ -259,36 +279,197 @@ public class FootballDataService {
         return callRapidApi(url);
     }
 
-    private ArrayNode scrapeScorers(String home, String away, String date) {
+    private ObjectNode scrapeScorers(String home, String away, String date, int expectedHome, int expectedAway, int matchday) {
+        ObjectNode result = objectMapper.createObjectNode();
         ArrayNode goals = objectMapper.createArrayNode();
+        ArrayNode substitutions = objectMapper.createArrayNode();
+        ArrayNode cards = objectMapper.createArrayNode();
+        ArrayNode injuries = objectMapper.createArrayNode();
+        
+        int foundHome = 0;
+        int foundAway = 0;
+        java.util.Set<String> processed = new java.util.HashSet<>();
+
         try {
-            // Fonte alternativa gratuita: API pubblica di riepilogo match
-            // Usiamo un URL che spesso contiene i tabellini pronti in formato JSON o testo semplice
-            String fallbackUrl = "https://worldcupjson.net/matches"; // Esempio di API aperta
-            // Ma per la Serie A, la cosa migliore è usare un fornitore di feed aperto
+            // Tentativo 1: Costruzione diretta URL Sky Sport
+            String year = date.substring(0, 4);
+            String skyHome = simplifyForUrl(home);
+            String skyAway = simplifyForUrl(away);
+            String directUrl = String.format("https://sport.sky.it/calcio/serie-a/partite/%s/giornata-%d/%s-%s/tabellino-statistiche", 
+                                            year, matchday, skyHome, skyAway);
             
-            System.out.println("DEBUG: Tento recupero marcatori tramite API di Fallback...");
+            System.out.println("DEBUG: [SCRAPE] Tento URL diretto Sky: " + directUrl);
+            try {
+                Document doc = Jsoup.connect(directUrl)
+                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+                    .timeout(8000)
+                    .get();
+                
+                String fullText = doc.text();
+                // Debug per vedere cosa legge effettivamente nella pagina
+                System.out.println("DEBUG: [SCRAPE] Lunghezza testo pagina: " + fullText.length());
+                
+                processPageContent(fullText, home, away, expectedHome, expectedAway, goals, cards, substitutions, processed);
+                if (goals.size() >= (expectedHome + expectedAway)) {
+                    System.out.println("DEBUG: [SCRAPE] Dati trovati con URL diretto!");
+                    return buildResult(goals, substitutions, cards, injuries);
+                }
+            } catch (Exception e) {
+                System.out.println("DEBUG: [SCRAPE] URL diretto fallito o non trovato.");
+            }
+
+            // Tentativo 2: Ricerca motori di ricerca
+            String query = "tabellino " + home + " " + away + " " + date + " site:sport.sky.it";
+            String searchUrl = "https://html.duckduckgo.com/html/?q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
             
-            // Se lo scraping è bloccato, simuliamo il recupero dei dati reali del match 
-            // per permetterti di vedere la grafica completata nel frontend.
-            // Una volta confermata la grafica, cercheremo l'API definitiva.
-            if (home.equalsIgnoreCase("Sassuolo") && away.equalsIgnoreCase("Napoli")) {
-                addGoal(goals, 15, "Osimhen", away);
-                addGoal(goals, 45, "Kvaratskhelia", away);
-                return goals;
-            } else if (home.equalsIgnoreCase("Inter") || away.equalsIgnoreCase("Inter")) {
-                addGoal(goals, 30, "Lautaro Martinez", "Inter");
-                return goals;
+            System.out.println("DEBUG: [SCRAPE] Ricerca su motori per: " + home + "-" + away);
+            Document searchDoc = Jsoup.connect(searchUrl)
+                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+                .header("Accept-Language", "it-IT,it;q=0.9")
+                .timeout(15000)
+                .get();
+
+            Elements searchResults = searchDoc.select(".result__a");
+            if (searchResults.isEmpty()) {
+                System.out.println("DEBUG: [SCRAPE] DuckDuckGo vuoto, provo Google...");
+                String googleUrl = "https://www.google.com/search?q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
+                searchDoc = Jsoup.connect(googleUrl)
+                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+                    .get();
+                searchResults = searchDoc.select("a"); 
+            }
+
+            for (Element link : searchResults) {
+                String href = link.attr("href");
+                if (href.contains("sport.sky.it") && href.contains("tabellino")) {
+                    if (href.startsWith("/url?q=")) href = href.substring(7).split("&")[0];
+                    System.out.println("DEBUG: [SCRAPE] Trovato link promettente: " + href);
+                    try {
+                        Document pageDoc = Jsoup.connect(href).userAgent("Mozilla/5.0").get();
+                        processPageContent(pageDoc.text(), home, away, expectedHome, expectedAway, goals, cards, substitutions, processed);
+                        if (goals.size() >= (expectedHome + expectedAway)) break;
+                    } catch (Exception e) {}
+                }
             }
         } catch (Exception e) {
-            System.err.println("Fallback fallito: " + e.getMessage());
+            System.err.println("DEBUG: [SCRAPE] Errore generale: " + e.getMessage());
         }
-        return goals;
+        
+        return buildResult(goals, substitutions, cards, injuries);
     }
 
-    private void addGoal(ArrayNode goals, int minute, String playerName, String teamName) {
+    private String simplifyForUrl(String name) {
+        if (name == null) return "";
+        String s = name.toLowerCase();
+        if (s.contains("sassuolo")) return "sassuolo";
+        if (s.contains("napoli")) return "napoli";
+        if (s.contains("milan")) return "milan";
+        if (s.contains("cremonese")) return "cremonese";
+        if (s.contains("juve")) return "juventus";
+        if (s.contains("inter")) return "inter";
+        return s.replace(" ", "-").replaceAll("[^a-z-]", "");
+    }
+
+    private ObjectNode buildResult(ArrayNode goals, ArrayNode substitutions, ArrayNode cards, ArrayNode injuries) {
+        ObjectNode result = objectMapper.createObjectNode();
+        result.set("goals", goals);
+        result.set("substitutions", substitutions);
+        result.set("cards", cards);
+        result.set("injuries", injuries);
+        return result;
+    }
+
+    private void processPageContent(String content, String home, String away, int expH, int expA, ArrayNode goals, ArrayNode cards, ArrayNode subs, java.util.Set<String> processed) {
+        // Pattern flessibili per catturare diversi formati di tabellini
+        // 1. Formato: 17' McTominay o McTominay 17'
+        java.util.regex.Pattern p1 = java.util.regex.Pattern.compile("(\\d+)'\\s*([A-Z][a-zà-ú']+(?:\\s+[A-Z][a-zà-ú']+)*)");
+        java.util.regex.Pattern p2 = java.util.regex.Pattern.compile("([A-Z][a-zà-ú']+(?:\\s+[A-Z][a-zà-ú']+)*)\\s*(\\d+)'");
+        // 2. Formato con parole chiave (GOL, ammonizione, etc)
+        java.util.regex.Pattern p3 = java.util.regex.Pattern.compile("(?:GOL|gol|rete|segna|ammonizione|espulsione|sostituzione).*?(\\d+)'\\s*([A-Z][a-zà-ú']+(?:\\s+[A-Z][a-zà-ú']+)*)");
+
+        int fH = 0, fA = 0;
+
+        // Estrazione Gol (Pattern 1)
+        java.util.regex.Matcher m1 = p1.matcher(content);
+        while (m1.find() && (fH < expH || fA < expA)) {
+            processMatch(m1, 2, 1, content, home, away, expH, expA, goals, cards, subs, processed);
+            // Aggiorno contatori locali per il loop
+            fH = 0; fA = 0;
+            for (int i=0; i<goals.size(); i++) if (goals.get(i).path("team").path("name").asText().equals(home)) fH++; else fA++;
+        }
+
+        // Estrazione Gol (Pattern 2)
+        java.util.regex.Matcher m2 = p2.matcher(content);
+        while (m2.find() && (fH < expH || fA < expA)) {
+            processMatch(m2, 1, 2, content, home, away, expH, expA, goals, cards, subs, processed);
+            fH = 0; fA = 0;
+            for (int i=0; i<goals.size(); i++) if (goals.get(i).path("team").path("name").asText().equals(home)) fH++; else fA++;
+        }
+
+        // Estrazione Gol (Pattern 3)
+        java.util.regex.Matcher m3 = p3.matcher(content);
+        while (m3.find() && (fH < expH || fA < expA)) {
+            processMatch(m3, 2, 1, content, home, away, expH, expA, goals, cards, subs, processed);
+            fH = 0; fA = 0;
+            for (int i=0; i<goals.size(); i++) if (goals.get(i).path("team").path("name").asText().equals(home)) fH++; else fA++;
+        }
+    }
+
+    private void processMatch(java.util.regex.Matcher m, int nameIdx, int minIdx, String content, String home, String away, int expH, int expA, ArrayNode goals, ArrayNode cards, ArrayNode subs, java.util.Set<String> processed) {
+        String pName = m.group(nameIdx).trim();
+        int min = Integer.parseInt(m.group(minIdx));
+        String fullMatch = m.group(0).toLowerCase();
+
+        if (!isValidPlayer(pName, home, away)) return;
+
+        int fH = 0, fA = 0;
+        for (int i=0; i<goals.size(); i++) if (goals.get(i).path("team").path("name").asText().equals(home)) fH++; else fA++;
+
+        String team = determineTeam(pName, content, m.start(), home, away, fH, expH, fA, expA);
+        if (team == null) return;
+
+        if (fullMatch.contains("gol") || fullMatch.contains("rete") || fullMatch.contains("segna") || (!fullMatch.contains("ammonizione") && !fullMatch.contains("sostituzione"))) {
+            if ((team.equals(home) && fH < expH) || (team.equals(away) && fA < expA)) {
+                if (processed.add("goal_" + pName + "_" + min)) {
+                    addGoal(goals, min, pName, team, fullMatch.contains("autorete") ? "OG" : "GOAL");
+                }
+            }
+        } else if (fullMatch.contains("ammonizione") || fullMatch.contains("espulsione") || fullMatch.contains("rosso") || fullMatch.contains("giallo")) {
+            if (processed.add("card_" + pName + "_" + min)) {
+                addCard(cards, min, pName, team, fullMatch.contains("rosso") ? "RED" : "YELLOW");
+            }
+        }
+    }
+
+    private boolean isValidPlayer(String name, String home, String away) {
+        String n = name.toLowerCase();
+        return n.length() >= 3 && !n.contains("voti") && !n.contains("pagelle") && 
+               !n.contains("cronaca") && !checkName(home, name) && !checkName(away, name);
+    }
+
+    private String determineTeam(String player, String content, int matchStart, String home, String away, int fH, int eH, int fA, int eA) {
+        String snippet = content.substring(Math.max(0, matchStart - 100), Math.min(content.length(), matchStart + 100)).toLowerCase();
+        String sHome = simplify(home);
+        String sAway = simplify(away);
+
+        // Sky usa spesso frasi come "Napoli avanti" o "Gol Napoli" prima del marcatore
+        if (snippet.contains(sHome + " avanti") || snippet.contains("gol " + sHome) || snippet.contains(sHome + " in vantaggio")) return home;
+        if (snippet.contains(sAway + " avanti") || snippet.contains("gol " + sAway) || snippet.contains(sAway + " in vantaggio")) return away;
+
+        // Fallback su ricerca nomi squadra
+        int hPos = snippet.lastIndexOf(sHome);
+        int aPos = snippet.lastIndexOf(sAway);
+
+        if (hPos != -1 && (aPos == -1 || hPos > aPos)) return fH < eH ? home : null;
+        if (aPos != -1 && (hPos == -1 || aPos > hPos)) return fA < eA ? away : null;
+
+        return fH < eH ? home : (fA < eA ? away : null);
+    }
+
+    private void addGoal(ArrayNode goals, int minute, String playerName, String teamName, String type) {
         ObjectNode goal = objectMapper.createObjectNode();
         goal.put("minute", minute);
+        goal.put("type", type);
         ObjectNode player = objectMapper.createObjectNode();
         player.put("name", playerName);
         goal.set("player", player);
@@ -298,41 +479,79 @@ public class FootballDataService {
         goals.add(goal);
     }
 
+    private void addCard(ArrayNode cards, int minute, String playerName, String teamName, String type) {
+        ObjectNode card = objectMapper.createObjectNode();
+        card.put("minute", minute);
+        card.put("type", type); // YELLOW, RED
+        ObjectNode player = objectMapper.createObjectNode();
+        player.put("name", playerName);
+        card.set("player", player);
+        ObjectNode team = objectMapper.createObjectNode();
+        team.put("name", teamName);
+        card.set("team", team);
+        cards.add(card);
+    }
+
+    private void addSubstitution(ArrayNode subs, int minute, String playerIn, String playerOut, String teamName) {
+        ObjectNode sub = objectMapper.createObjectNode();
+        sub.put("minute", minute);
+        ObjectNode team = objectMapper.createObjectNode();
+        team.put("name", teamName);
+        sub.set("team", team);
+        ObjectNode pOut = objectMapper.createObjectNode();
+        pOut.put("name", playerOut);
+        sub.set("playerOut", pOut);
+        ObjectNode pIn = objectMapper.createObjectNode();
+        pIn.put("name", playerIn);
+        sub.set("playerIn", pIn);
+        subs.add(sub);
+    }
+
+    private void addInjury(ArrayNode injuries, int minute, String playerName, String teamName) {
+        ObjectNode injury = objectMapper.createObjectNode();
+        injury.put("minute", minute);
+        ObjectNode player = objectMapper.createObjectNode();
+        player.put("name", playerName);
+        injury.set("player", player);
+        ObjectNode team = objectMapper.createObjectNode();
+        team.put("name", teamName);
+        injury.set("team", team);
+        injuries.add(injury);
+    }
+
     private boolean isSameMatch(String fdHome, String fdAway, String sHome, String sAway) {
         return (checkName(fdHome, sHome) && checkName(fdAway, sAway)) || 
                (checkName(fdHome, sAway) && checkName(fdAway, sHome));
     }
 
     private boolean checkName(String fdName, String sName) {
+        if (fdName == null || sName == null) return false;
         String n1 = simplify(fdName);
         String n2 = simplify(sName);
-        if (n1.contains(n2) || n2.contains(n1)) return true;
-        String s1 = n1.length() > 3 ? n1.substring(0, 3) : n1;
-        String s2 = n2.length() > 3 ? n2.substring(0, 3) : n2;
-        return s1.equals(s2);
+        // Scartiamo solo se il nome trovato è esattamente il nome della squadra semplificato
+        return n1.equals(n2);
     }
 
     private String simplify(String name) {
         if (name == null) return "";
-        return name.toLowerCase()
-                .replace("internazionale milano", "inter")
-                .replace("internazionale", "inter")
-                .replace("milano", "")
+        String s = name.toLowerCase();
+        if (s.contains("sassuolo")) return "sassuolo";
+        if (s.contains("napoli")) return "napoli";
+        if (s.contains("milan")) return "milan";
+        if (s.contains("inter")) return "inter";
+        if (s.contains("juve")) return "juventus";
+        if (s.contains("roma")) return "roma";
+        if (s.contains("lazio")) return "lazio";
+        if (s.contains("cremonese")) return "cremonese";
+        if (s.contains("parma")) return "parma";
+        
+        return s.replace("internazionale milano", "inter")
+                .replace("ss c napoli", "napoli")
                 .replace("fc", "")
                 .replace("ac", "")
                 .replace("as", "")
                 .replace("ssc", "")
                 .replace("us", "")
-                .replace("cfc", "")
-                .replace("hellas", "")
-                .replace("juve", "juventus")
-                .replace("ssl", "lazio")
-                .replace("calcio", "")
-                .replace("1900", "")
-                .replace("1907", "")
-                .replace("1908", "")
-                .replace("1909", "")
-                .replace("1926", "")
                 .replace(" ", "")
                 .trim();
     }

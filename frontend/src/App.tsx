@@ -44,9 +44,22 @@ interface Goal {
 interface Substitution {
   minute: number;
   extraTime?: number | null;
-  team: { id: number; name: string; logo?: string };
-  playerOut: { id: number; name: string };
-  playerIn: { id: number; name: string };
+  team: { id?: number; name: string; logo?: string };
+  playerOut: { id?: number; name: string };
+  playerIn: { id?: number; name: string };
+}
+
+interface Card {
+  minute: number;
+  type: 'YELLOW' | 'RED';
+  team: { id?: number; name: string };
+  player: { id?: number; name: string };
+}
+
+interface Injury {
+  minute: number;
+  team: { id?: number; name: string };
+  player: { id?: number; name: string };
 }
 
 // ---------------------------------------
@@ -138,6 +151,8 @@ interface MatchDetails extends Omit<Match, 'homeTeam' | 'awayTeam'> {
   awayTeam: TeamMatchInfo;
   goals?: Goal[];
   substitutions?: Substitution[];
+  cards?: Card[];
+  injuries?: Injury[];
   statistics?: Record<string, { home: number; away: number }>;
 }
 
@@ -153,6 +168,9 @@ interface FootballDataGoal {
 interface MatchResponse {
   footballData?: {
     goals?: FootballDataGoal[];
+    substitutions?: Substitution[];
+    cards?: Card[];
+    injuries?: Injury[];
   };
   rapidApi?: FreeApiResponse | AfResponse | { error: string } | Record<string, unknown>;
 }
@@ -381,22 +399,26 @@ function App() {
 
       console.log("DEBUG: Risposta totale dal backend:", data);
 
-      if (fdData && fdData.goals && Array.isArray(fdData.goals)) {
-        console.log("DEBUG: Marcatori grezzi da Football-Data:", fdData.goals);
-        fdGoals = fdData.goals.map((g: FootballDataGoal) => ({
-          minute: g.minute,
-          extraTime: g.extraTime,
-          type: g.type || 'GOAL',
-          team: { id: g.team?.id || 0, name: g.team?.name || '' },
-          player: { id: g.player?.id || 0, name: g.player?.name || 'Giocatore' },
-          assist: g.assist ? { id: g.assist.id, name: g.assist.name } : null
-        }));
-        
-        console.log("DEBUG: Marcatori mappati per lo stato:", fdGoals);
+      if (fdData) {
+        if (fdData.goals && Array.isArray(fdData.goals)) {
+          console.log("DEBUG: Marcatori grezzi da Football-Data:", fdData.goals);
+          fdGoals = fdData.goals.map((g: FootballDataGoal) => ({
+            minute: g.minute,
+            extraTime: g.extraTime,
+            type: g.type || 'GOAL',
+            team: { id: g.team?.id || 0, name: g.team?.name || '' },
+            player: { id: g.player?.id || 0, name: g.player?.name || 'Giocatore' },
+            assist: g.assist ? { id: g.assist.id, name: g.assist.name } : null
+          }));
+          console.log("DEBUG: Marcatori mappati per lo stato:", fdGoals);
+        }
         
         setMatchDetails(prev => ({
           ...(prev || baseMatchDetails),
-          goals: fdGoals
+          goals: fdGoals.length > 0 ? fdGoals : (prev?.goals || []),
+          substitutions: fdData.substitutions || prev?.substitutions || [],
+          cards: fdData.cards || prev?.cards || [],
+          injuries: fdData.injuries || prev?.injuries || []
         }));
       }
 
@@ -891,13 +913,41 @@ function App() {
                               {matchDetails.goals
                                 .filter(goal => 
                                   goal.team.id === matchDetails.homeTeam.id || 
-                                  goal.team.name.toLowerCase().includes(matchDetails.homeTeam.name.toLowerCase()) ||
-                                  matchDetails.homeTeam.name.toLowerCase().includes(goal.team.name.toLowerCase())
+                                  matchDetails.homeTeam.name.toLowerCase().includes(goal.team.name.toLowerCase()) ||
+                                  goal.team.name.toLowerCase().includes(matchDetails.homeTeam.name.toLowerCase())
                                 )
                                 .map((goal, idx) => (
                                   <div key={idx} className="flex items-center gap-2 text-sm text-slate-300">
-                                    <Target className="h-3 w-3 text-sky-400" />
-                                    <span>{goal.player.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'Own Goal' ? '(AU)' : ''}</span>
+                                    <span className={`text-sm ${goal.type === 'Own Goal' || goal.type === 'AUTOGOAL' ? 'grayscale brightness-50 sepia-[100%] hue-rotate-[-50deg] saturate-[500%]' : ''}`}>⚽</span>
+                                    <span className={goal.type === 'Own Goal' || goal.type === 'AUTOGOAL' ? 'text-rose-400' : ''}>
+                                      {goal.player.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'Own Goal' || goal.type === 'AUTOGOAL' ? '(OG)' : (goal.type === 'PENALTY' ? '(P)' : '')}
+                                    </span>
+                                  </div>
+                                ))}
+
+                              {/* Cards Section */}
+                              {matchDetails.cards && matchDetails.cards
+                                .filter(c => 
+                                  matchDetails.homeTeam.name.toLowerCase().includes(c.team.name.toLowerCase()) || 
+                                  c.team.name.toLowerCase().includes(matchDetails.homeTeam.name.toLowerCase())
+                                )
+                                .map((card, idx) => (
+                                  <div key={`card-${idx}`} className="flex items-center gap-2 text-sm text-slate-300">
+                                    <div className={`w-2.5 h-3.5 rounded-sm ${card.type === 'RED' ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]' : 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.6)]'}`}></div>
+                                    <span>{card.player.name} {card.minute}'</span>
+                                  </div>
+                                ))}
+
+                              {/* Injuries Section */}
+                              {matchDetails.injuries && matchDetails.injuries
+                                .filter(i => 
+                                  matchDetails.homeTeam.name.toLowerCase().includes(i.team.name.toLowerCase()) || 
+                                  i.team.name.toLowerCase().includes(matchDetails.homeTeam.name.toLowerCase())
+                                )
+                                .map((injury, idx) => (
+                                  <div key={`inj-${idx}`} className="flex items-center gap-2 text-sm text-slate-300">
+                                    <span className="text-rose-500 font-bold">✚</span>
+                                    <span>{injury.player.name} {injury.minute}'</span>
                                   </div>
                                 ))}
                             </div>
@@ -905,13 +955,41 @@ function App() {
                               {matchDetails.goals
                                 .filter(goal => 
                                   goal.team.id === matchDetails.awayTeam.id || 
-                                  goal.team.name.toLowerCase().includes(matchDetails.awayTeam.name.toLowerCase()) ||
-                                  matchDetails.awayTeam.name.toLowerCase().includes(goal.team.name.toLowerCase())
+                                  matchDetails.awayTeam.name.toLowerCase().includes(goal.team.name.toLowerCase()) ||
+                                  goal.team.name.toLowerCase().includes(matchDetails.awayTeam.name.toLowerCase())
                                 )
                                 .map((goal, idx) => (
-                                  <div key={idx} className="flex items-center gap-2 justify-end text-sm text-slate-300">
-                                    <span>{goal.player.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'Own Goal' ? '(AU)' : ''}</span>
-                                    <Target className="h-3 w-3 text-rose-400" />
+                                  <div key={idx} className="flex items-center justify-end gap-2 text-sm text-slate-300">
+                                    <span className={goal.type === 'Own Goal' || goal.type === 'AUTOGOAL' ? 'text-rose-400' : ''}>
+                                      {goal.player.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'Own Goal' || goal.type === 'AUTOGOAL' ? '(OG)' : (goal.type === 'PENALTY' ? '(P)' : '')}
+                                    </span>
+                                    <span className={`text-sm ${goal.type === 'Own Goal' || goal.type === 'AUTOGOAL' ? 'grayscale brightness-50 sepia-[100%] hue-rotate-[-50deg] saturate-[500%]' : ''}`}>⚽</span>
+                                  </div>
+                                ))}
+
+                              {/* Cards Section */}
+                              {matchDetails.cards && matchDetails.cards
+                                .filter(c => 
+                                  matchDetails.awayTeam.name.toLowerCase().includes(c.team.name.toLowerCase()) || 
+                                  c.team.name.toLowerCase().includes(matchDetails.awayTeam.name.toLowerCase())
+                                )
+                                .map((card, idx) => (
+                                  <div key={`card-${idx}`} className="flex items-center justify-end gap-2 text-sm text-slate-300">
+                                    <span>{card.player.name} {card.minute}'</span>
+                                    <div className={`w-2.5 h-3.5 rounded-sm ${card.type === 'RED' ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]' : 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.6)]'}`}></div>
+                                  </div>
+                                ))}
+
+                              {/* Injuries Section */}
+                              {matchDetails.injuries && matchDetails.injuries
+                                .filter(i => 
+                                  matchDetails.awayTeam.name.toLowerCase().includes(i.team.name.toLowerCase()) || 
+                                  i.team.name.toLowerCase().includes(matchDetails.awayTeam.name.toLowerCase())
+                                )
+                                .map((injury, idx) => (
+                                  <div key={`inj-${idx}`} className="flex items-center justify-end gap-2 text-sm text-slate-300">
+                                    <span>{injury.player.name} {injury.minute}'</span>
+                                    <span className="text-rose-500 font-bold">✚</span>
                                   </div>
                                 ))}
                             </div>
