@@ -12,7 +12,11 @@ Get-Content $envFile |
   Where-Object { $_ -and -not $_.TrimStart().StartsWith('#') } |
   ForEach-Object {
     $parts = $_ -split '=',2
-    Set-Item -Path "env:$($parts[0].Trim())" -Value $parts[1].Trim()
+    if ($parts.Count -eq 2) {
+      Set-Item -Path "env:$($parts[0].Trim())" -Value $parts[1].Trim()
+    } else {
+      Write-Host "Salto riga non valida in .env: $_" -ForegroundColor Yellow
+    }
   }
 
 Write-Output "SPRING_DATASOURCE_URL = $env:SPRING_DATASOURCE_URL"

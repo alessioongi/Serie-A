@@ -141,6 +141,22 @@ interface MatchDetails extends Omit<Match, 'homeTeam' | 'awayTeam'> {
   statistics?: Record<string, { home: number; away: number }>;
 }
 
+interface FootballDataGoal {
+  minute: number;
+  extraTime?: number | null;
+  type?: string;
+  team?: { id: number; name: string };
+  player?: { id: number; name: string };
+  assist?: { id: number; name: string } | null;
+}
+
+interface MatchResponse {
+  footballData?: {
+    goals?: FootballDataGoal[];
+  };
+  rapidApi?: FreeApiResponse | AfResponse | { error: string } | Record<string, unknown>;
+}
+
 interface Scorer {
   player: { id: number; name: string };
   team: { name: string; crest: string };
@@ -352,22 +368,41 @@ function App() {
     };
 
     setMatchDetails(baseMatchDetails);
+    let fdGoals: Goal[] = [];
 
     try {
       console.log(`DEBUG: Inizio recupero dati per match ID: ${id}`);
-      const response = await axios.get<FreeApiResponse | AfResponse | { error: string } | Record<string, unknown>>(`http://localhost:8080/api/teams/matches/${id}`);
-      const responseData = response.data;
-      console.log("DEBUG: Risposta API ricevuta:", responseData);
+      
+      const response = await axios.get<MatchResponse>(`http://localhost:8080/api/teams/matches/${id}`);
+      const data = response.data;
+      
+      const responseData = data.rapidApi || data;
+      const fdData = data.footballData;
 
-      // Se Football-Data fallisce (es. errore 429), logghiamo ma non blocchiamo tutto se possibile
-      if (typeof responseData === 'object' && responseData !== null && 'error' in responseData) {
-        console.warn("DEBUG: Backend ha restituito un errore:", responseData.error);
-        // Se l'errore è 429, lanciamo comunque l'errore per ora, ma il backend andrebbe corretto
-        throw new Error(String(responseData.error));
+      console.log("DEBUG: Risposta totale dal backend:", data);
+
+      if (fdData && fdData.goals && Array.isArray(fdData.goals)) {
+        console.log("DEBUG: Marcatori grezzi da Football-Data:", fdData.goals);
+        fdGoals = fdData.goals.map((g: FootballDataGoal) => ({
+          minute: g.minute,
+          extraTime: g.extraTime,
+          type: g.type || 'GOAL',
+          team: { id: g.team?.id || 0, name: g.team?.name || '' },
+          player: { id: g.player?.id || 0, name: g.player?.name || 'Giocatore' },
+          assist: g.assist ? { id: g.assist.id, name: g.assist.name } : null
+        }));
+        
+        console.log("DEBUG: Marcatori mappati per lo stato:", fdGoals);
+        
+        setMatchDetails(prev => ({
+          ...(prev || baseMatchDetails),
+          goals: fdGoals
+        }));
       }
 
       const isFreeApiResponse = (data: unknown): data is FreeApiResponse => {
-        return typeof data === 'object' && data !== null && 'status' in data && (data as FreeApiResponse).status === 'success';
+        const d = data as FreeApiResponse & { footballData?: unknown };
+        return typeof d === 'object' && d !== null && (d.status === 'success' || (d.response && Array.isArray(d.response.matches)) || !!d.footballData);
       };
 
       if (isFreeApiResponse(responseData)) {
@@ -537,9 +572,28 @@ function App() {
               homeFormation = hL.formation || hL.system || '';
               awayFormation = aL.formation || aL.system || '';
 
-              const extractPlayers = (list: FreeApiPlayer[] | undefined) => {
-                if (!list || !Array.isArray(list)) return [];
-                return list.map(p => ({
+              interface ApiPlayer {
+                id?: number;
+                playerId?: number;
+                name?: string;
+                playerName?: string;
+                player?: { name?: string };
+                number?: number;
+                shirtNumber?: number;
+                jerseyNumber?: number;
+                position?: string;
+                pos?: string;
+              }
+
+              const extractPlayers = (l: { startXI?: ApiPlayer[] | Record<string, ApiPlayer>; startingLineup?: ApiPlayer[] | Record<string, ApiPlayer>; players?: ApiPlayer[] | Record<string, ApiPlayer>; substitutes?: ApiPlayer[] | Record<string, ApiPlayer>; bench?: ApiPlayer[] | Record<string, ApiPlayer> } | ApiPlayer[] | Record<string, ApiPlayer> | undefined): Player[] => {
+                const list = (l && typeof l === 'object' && !Array.isArray(l)) 
+                  ? (l.startXI || l.startingLineup || l.players || l.substitutes || l.bench || l)
+                  : l;
+                
+                if (!list) return [];
+                const playerArray = Array.isArray(list) ? list : Object.values(list);
+                
+                return playerArray.map((p: ApiPlayer) => ({
                   id: p.id || p.playerId || 0,
                   name: p.name || p.playerName || p.player?.name || 'Giocatore',
                   shirtNumber: p.number || p.shirtNumber || p.jerseyNumber || 0,
@@ -547,14 +601,14 @@ function App() {
                 }));
               };
 
-              homeLineup = extractPlayers(hL.startXI || hL.startingLineup || hL.players);
-              awayLineup = extractPlayers(aL.startXI || aL.startingLineup || aL.players);
+              homeLineup = extractPlayers(hL);
+              awayLineup = extractPlayers(aL);
               homeBench = extractPlayers(hL.substitutes || hL.bench);
               awayBench = extractPlayers(aL.substitutes || aL.bench);
             }
           }
 
-          const findStat = (keys: string[]) => {
+          const findStat = (keys: string[]): { home: number; away: number } => {
             if (!statsData || !statsData.response) return { home: 0, away: 0 };
             const resp = statsData.response;
             const statsSource = resp.stats || resp.statistics || resp.match_stats || resp.data || resp.match_statistics;
@@ -616,11 +670,14 @@ function App() {
           setMatchDetails(prev => {
             if (!prev) return null;
             
+            // Uniamo i gol, dando priorità a quelli di Football-Data (fdGoals)
+            const finalGoals = fdGoals.length > 0 ? fdGoals : (apiGoals.length > 0 ? apiGoals : (prev ? prev.goals || [] : []));
+
             return {
               ...prev,
               utcDate: matchDateFromApi || prev.utcDate,
               referees: refereeName ? [{ name: refereeName }] : (prev.referees || []),
-              goals: apiGoals.length > 0 ? apiGoals : (prev.goals || []),
+              goals: finalGoals,
               homeTeam: {
                 ...prev.homeTeam,
                 formation: homeFormation || prev.homeTeam.formation,
@@ -832,7 +889,11 @@ function App() {
                           <div className="grid grid-cols-2 gap-8">
                             <div className="space-y-2">
                               {matchDetails.goals
-                                .filter(g => g.team.id === matchDetails.homeTeam.id || g.team.name === matchDetails.homeTeam.name)
+                                .filter(goal => 
+                                  goal.team.id === matchDetails.homeTeam.id || 
+                                  goal.team.name.toLowerCase().includes(matchDetails.homeTeam.name.toLowerCase()) ||
+                                  matchDetails.homeTeam.name.toLowerCase().includes(goal.team.name.toLowerCase())
+                                )
                                 .map((goal, idx) => (
                                   <div key={idx} className="flex items-center gap-2 text-sm text-slate-300">
                                     <Target className="h-3 w-3 text-sky-400" />
@@ -842,7 +903,11 @@ function App() {
                             </div>
                             <div className="space-y-2 text-right">
                               {matchDetails.goals
-                                .filter(g => g.team.id === matchDetails.awayTeam.id || g.team.name === matchDetails.awayTeam.name)
+                                .filter(goal => 
+                                  goal.team.id === matchDetails.awayTeam.id || 
+                                  goal.team.name.toLowerCase().includes(matchDetails.awayTeam.name.toLowerCase()) ||
+                                  matchDetails.awayTeam.name.toLowerCase().includes(goal.team.name.toLowerCase())
+                                )
                                 .map((goal, idx) => (
                                   <div key={idx} className="flex items-center gap-2 justify-end text-sm text-slate-300">
                                     <span>{goal.player.name} {goal.minute}'{goal.extraTime ? `+${goal.extraTime}` : ''} {goal.type === 'Own Goal' ? '(AU)' : ''}</span>
