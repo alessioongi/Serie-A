@@ -400,8 +400,8 @@ public class FootballDataService {
     }
 
     private void processPageContent(String content, String home, String away, int expH, int expA, ArrayNode goals, ArrayNode cards, ArrayNode subs, java.util.Set<String> processed) {
-        // Regex potenziata: accetta caratteri accentati (Á, É, etc.) e formati di minuti con spazi
-        java.util.regex.Pattern goalP = java.util.regex.Pattern.compile("([A-Z][a-zA-Zà-úÁ-Ú'\\.]+(?:\\s+[A-Z][a-zA-Zà-úÁ-Ú'\\.]*)*)\\s+((?:\\d+(?:\\s*'\\s*\\+\\s*\\d+)?|\\d+)'(?:[\\s,]*\\d+(?:\\s*'\\s*\\+\\s*\\d+)?')*(?:\\s*\\(?(?:Rig(?:ore|\\.)?|[Rr]|Aut(?:ogol|\\.)?)\\)?)?)", java.util.regex.Pattern.CASE_INSENSITIVE);
+        // Regex ultra-potenziata: cattura nomi (anche con accenti e punti) e minuti con eventuali marcatori
+        java.util.regex.Pattern goalP = java.util.regex.Pattern.compile("([A-ZÁÉÍÓÚ][a-zA-Zà-úÁ-ÉÍÓÚ'\\.\\s\\-]{1,30}[a-zA-Zà-úÁ-ÉÍÓÚ\\.])\\s+((?:\\d+(?:\\s*'\\s*\\+\\s*\\d+)?|\\d+)'(?:[\\s,]*\\d+(?:\\s*'\\s*\\+\\s*\\d+)?')*(?:\\s*\\(?(?:Rig(?:ore|\\.)?|[Rr]|Aut(?:ogol|\\.)?|OG|og|A)\\)?)" + "?)", java.util.regex.Pattern.CASE_INSENSITIVE);
         
         int fH = 0, fA = 0;
         goals.removeAll();
@@ -416,27 +416,47 @@ public class FootballDataService {
             String pName = cleanPlayerName(rawName, home, away);
 
             if (isValidPlayer(pName, home, away)) {
-                java.util.regex.Matcher minMatch = java.util.regex.Pattern.compile("(\\d+)").matcher(allMinutes);
-                while (minMatch.find()) {
-                    int minuteInt = Integer.parseInt(minMatch.group(1));
-                    String uniqueKey = minuteInt + "_" + pName.toLowerCase();
-                    
-                    if (localProcessed.add(uniqueKey)) {
-                        if (team == null) {
-                            if (fH < expH && fA >= expA) team = home;
-                            else if (fA < expA && fH >= expH) team = away;
-                        }
+                // Split minutes by comma to handle multiple goals correctly
+                String[] goalParts = allMinutes.split(",");
+                for (String part : goalParts) {
+                    java.util.regex.Matcher mMin = java.util.regex.Pattern.compile("(\\d+)(?:\\s*'\\s*\\+\\s*(\\d+))?").matcher(part);
+                    if (mMin.find()) {
+                        String baseMin = mMin.group(1);
+                        String recMin = mMin.group(2);
+                        // Formato richiesto: minuto + recupero (es. 90 +5)
+                        String displayMin = (recMin != null) ? baseMin + " +" + recMin : baseMin;
+                        
+                        String uniqueKey = displayMin + "_" + pName.toLowerCase();
+                        
+                        if (localProcessed.add(uniqueKey)) {
+                            if (team == null) {
+                                if (fH < expH && fA >= expA) team = home;
+                                else if (fA < expA && fH >= expH) team = away;
+                            }
 
-                        if (team != null) {
-                            String lowerM = allMinutes.toLowerCase();
-                            boolean isPenalty = lowerM.contains("rig") || lowerM.contains("(r)");
-                            boolean isAutogol = lowerM.contains("aut");
+                            if (team != null) {
+                                String lowerPart = part.toLowerCase();
+                                // Supporta sia (R) che (Rig.) che rigore
+                                boolean isPenalty = lowerPart.contains("rig") || lowerPart.contains("(r)") || lowerPart.matches(".*\\b[Rr]\\b.*");
+                                boolean isAutogol = lowerPart.contains("aut") || lowerPart.contains("og") || lowerPart.contains("(a)") || lowerPart.matches(".*\\b[Aa]\\b.*");
 
-                            // Aggiungiamo (A) se è un autogol, ma manteniamo la squadra assegnata da Sky
-                            String displayName = pName + (isAutogol ? " (A)" : "");
-                            
-                            addGoal(goals, minuteInt, displayName, team, isPenalty ? "(P)" : "GOAL");
-                            if (team.equals(home)) fH++; else fA++;
+                                String displayName = pName;
+                                if (isPenalty) displayName = displayName + " (R)";
+                                if (isAutogol) displayName = displayName + " (A)";
+                                
+                                // Se è un autogol, lo lasciamo sotto la squadra del giocatore (come nel tabellino Sky)
+                                // ma ci assicuriamo che il conteggio fH/fA rifletta chi RICEVE il punto per la condizione di uscita
+                                String goalTeam = team;
+                                
+                                addGoal(goals, displayMin, displayName, goalTeam, isPenalty ? "(P)" : (isAutogol ? "OG" : "GOAL"));
+                                
+                                // Per il conteggio interno dei gol trovati:
+                                if (isAutogol) {
+                                    if (team.equals(home)) fA++; else fH++;
+                                } else {
+                                    if (team.equals(home)) fH++; else fA++;
+                                }
+                            }
                         }
                     }
                 }
@@ -446,9 +466,19 @@ public class FootballDataService {
     }
 
     private String cleanPlayerName(String name, String home, String away) {
+        if (name == null) return "";
+        String cleaned = name.trim();
+        
+        // Rimuove solo parole di disturbo note, non tocchiamo singole lettere all'inizio
+        cleaned = cleaned.replaceAll("(?i)\\b(ago|inizio|fine|fc|ac|ssc|as|us|bc|1907|1908|1900|1927|marcatore|gol|rete)\\b", "").trim();
+        
+        // Rimuove nomi squadre solo se sono all'inizio e seguiti da spazio
         String sH = simplify(home).toLowerCase();
         String sA = simplify(away).toLowerCase();
-        return name.replaceAll("(?i)\\b(" + sH + "|" + sA + "|fc|ac|ssc|as|us|fine|inizio|gol|rete|ancora|lui|ago|inter|genoa|milan|juve|napoli|roma|lazio|atalanta|fiorentina|bologna|torino|verona|udinese|empoli|lecce|parma|venezia|cagliari|monza|como|cremonese)\\b", "").trim();
+        if (cleaned.toLowerCase().startsWith(sH + " ")) cleaned = cleaned.substring(sH.length()).trim();
+        if (cleaned.toLowerCase().startsWith(sA + " ")) cleaned = cleaned.substring(sA.length()).trim();
+
+        return cleaned.replaceAll("\\s+", " ").trim();
     }
 
     private String determineTeamUltra(String content, int start, int end, String home, String away) {
@@ -480,11 +510,37 @@ public class FootballDataService {
             goalList.add(goals.get(i));
         }
         
-        goalList.sort((a, b) -> Integer.compare(a.path("minute").asInt(), b.path("minute").asInt()));
+        goalList.sort((a, b) -> {
+            String m1 = a.path("minute").asText();
+            String m2 = b.path("minute").asText();
+            
+            int v1 = extractSortMinute(m1);
+            int v2 = extractSortMinute(m2);
+            
+            return Integer.compare(v1, v2);
+        });
         
         goals.removeAll();
         for (JsonNode goal : goalList) {
             goals.add(goal);
+        }
+    }
+
+    private int extractSortMinute(String minuteStr) {
+        if (minuteStr == null) return 0;
+        // Se è nel formato "90 +5", prendiamo il 90 come base e il 5 come extra
+        if (minuteStr.contains("+")) {
+            String[] parts = minuteStr.split("\\+");
+            try {
+                int base = Integer.parseInt(parts[0].trim());
+                int rec = Integer.parseInt(parts[1].trim());
+                return base * 100 + rec;
+            } catch (Exception e) {}
+        }
+        try {
+            return Integer.parseInt(minuteStr.replaceAll("[^0-9]", "")) * 100;
+        } catch (Exception e) {
+            return 0;
         }
     }
 
@@ -522,7 +578,7 @@ public class FootballDataService {
         return null;
     }
 
-    private void addGoal(ArrayNode goals, int minute, String playerName, String teamName, String type) {
+    private void addGoal(ArrayNode goals, String minute, String playerName, String teamName, String type) {
         ObjectNode goal = objectMapper.createObjectNode();
         goal.put("minute", minute);
         goal.put("type", type);
@@ -535,7 +591,7 @@ public class FootballDataService {
         goals.add(goal);
     }
 
-    private void addCard(ArrayNode cards, int minute, String playerName, String teamName, String type) {
+    private void addCard(ArrayNode cards, String minute, String playerName, String teamName, String type) {
         ObjectNode card = objectMapper.createObjectNode();
         card.put("minute", minute);
         card.put("type", type); // YELLOW, RED
@@ -548,7 +604,7 @@ public class FootballDataService {
         cards.add(card);
     }
 
-    private void addSubstitution(ArrayNode subs, int minute, String playerIn, String playerOut, String teamName) {
+    private void addSubstitution(ArrayNode subs, String minute, String playerIn, String playerOut, String teamName) {
         ObjectNode sub = objectMapper.createObjectNode();
         sub.put("minute", minute);
         ObjectNode team = objectMapper.createObjectNode();
@@ -563,7 +619,7 @@ public class FootballDataService {
         subs.add(sub);
     }
 
-    private void addInjury(ArrayNode injuries, int minute, String playerName, String teamName) {
+    private void addInjury(ArrayNode injuries, String minute, String playerName, String teamName) {
         ObjectNode injury = objectMapper.createObjectNode();
         injury.put("minute", minute);
         ObjectNode player = objectMapper.createObjectNode();
