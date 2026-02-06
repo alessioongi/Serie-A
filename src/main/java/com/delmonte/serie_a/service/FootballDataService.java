@@ -196,14 +196,16 @@ public class FootballDataService {
             combinedResponse.set("footballData", fdRoot);
             
             // TENTATIVO DI RECUPERO MARCATORI ESTERNI (SCRAPING FALLBACK)
-            if (!fdRoot.has("goals") || fdRoot.path("goals").size() == 0) {
+            boolean noGoals = !fdRoot.has("goals") || fdRoot.path("goals").size() == 0;
+            boolean noCards = !fdRoot.has("cards") || fdRoot.path("cards").size() == 0;
+            if (noGoals || noCards) {
                 // Controllo se è uno 0-0 confermato
                 JsonNode score = fdRoot.path("score").path("fullTime");
-                if (score.has("home") && score.has("away") && 
-                    score.path("home").asInt() == 0 && score.path("away").asInt() == 0) {
-                    System.out.println("DEBUG: Match terminato 0-0. Salto scraping marcatori.");
+                if (noGoals && score.has("home") && score.has("away") && 
+                    score.path("home").asInt() == 0 && score.path("away").asInt() == 0 && !noCards) {
+                    System.out.println("DEBUG: Match terminato 0-0 e cartellini presenti. Salto scraping.");
                 } else {
-                    System.out.println("DEBUG: Marcatori assenti su API. Tento recupero esterno tramite scraping...");
+                    System.out.println("DEBUG: Dati incompleti su API. Tento recupero esterno...");
                     try {
                         JsonNode fullScore = fdRoot.path("score").path("fullTime");
                         int hScore = fullScore.path("home").asInt(0);
@@ -361,13 +363,31 @@ public class FootballDataService {
     private String simplifyForUrl(String name) {
         if (name == null) return "";
         String s = name.toLowerCase();
+        // Sky usa nomi secchi e semplici negli URL
         if (s.contains("sassuolo")) return "sassuolo";
         if (s.contains("napoli")) return "napoli";
         if (s.contains("milan")) return "milan";
+        if (s.contains("pisa")) return "pisa";
+        if (s.contains("como")) return "como";
         if (s.contains("cremonese")) return "cremonese";
         if (s.contains("juve")) return "juventus";
         if (s.contains("inter")) return "inter";
-        return s.replace(" ", "-").replaceAll("[^a-z-]", "");
+        if (s.contains("verona")) return "verona";
+        if (s.contains("roma")) return "roma";
+        if (s.contains("lazio")) return "lazio";
+        if (s.contains("atalanta")) return "atalanta";
+        if (s.contains("fiorentina")) return "fiorentina";
+        if (s.contains("bologna")) return "bologna";
+        if (s.contains("torino")) return "torino";
+        if (s.contains("udinese")) return "udinese";
+        if (s.contains("empoli")) return "empoli";
+        if (s.contains("lecce")) return "lecce";
+        if (s.contains("parma")) return "parma";
+        if (s.contains("venezia")) return "venezia";
+        if (s.contains("cagliari")) return "cagliari";
+        if (s.contains("monza")) return "monza";
+        if (s.contains("genoa")) return "genoa";
+        return s.split(" ")[0].replaceAll("[^a-z]", "");
     }
 
     private ObjectNode buildResult(ArrayNode goals, ArrayNode substitutions, ArrayNode cards, ArrayNode injuries) {
@@ -380,90 +400,126 @@ public class FootballDataService {
     }
 
     private void processPageContent(String content, String home, String away, int expH, int expA, ArrayNode goals, ArrayNode cards, ArrayNode subs, java.util.Set<String> processed) {
-        // Pattern flessibili per catturare diversi formati di tabellini
-        // 1. Formato: 17' McTominay o McTominay 17'
-        java.util.regex.Pattern p1 = java.util.regex.Pattern.compile("(\\d+)'\\s*([A-Z][a-zà-ú']+(?:\\s+[A-Z][a-zà-ú']+)*)");
-        java.util.regex.Pattern p2 = java.util.regex.Pattern.compile("([A-Z][a-zà-ú']+(?:\\s+[A-Z][a-zà-ú']+)*)\\s*(\\d+)'");
-        // 2. Formato con parole chiave (GOL, ammonizione, etc)
-        java.util.regex.Pattern p3 = java.util.regex.Pattern.compile("(?:GOL|gol|rete|segna|ammonizione|espulsione|sostituzione).*?(\\d+)'\\s*([A-Z][a-zà-ú']+(?:\\s+[A-Z][a-zà-ú']+)*)");
-
+        // Regex flessibile per catturare Nome + Minuti
+        java.util.regex.Pattern goalP = java.util.regex.Pattern.compile("([A-Z][a-zA-Zà-ú'\\.]+(?:\\s+[A-Z][a-zA-Zà-ú'\\.]*)*)\\s+((?:\\d+(?:'\\+\\d+)?|\\d+)'(?:[\\s,]*\\d+(?:'\\+\\d+)?')*(?:\\s*\\(?[Rr]ig(?:ore|\\.)?\\)?)?)");
+        
         int fH = 0, fA = 0;
+        goals.removeAll();
+        java.util.Set<String> localProcessed = new java.util.HashSet<>();
 
-        // Estrazione Gol (Pattern 1)
-        java.util.regex.Matcher m1 = p1.matcher(content);
-        while (m1.find() && (fH < expH || fA < expA)) {
-            processMatch(m1, 2, 1, content, home, away, expH, expA, goals, cards, subs, processed);
-            // Aggiorno contatori locali per il loop
-            fH = 0; fA = 0;
-            for (int i=0; i<goals.size(); i++) if (goals.get(i).path("team").path("name").asText().equals(home)) fH++; else fA++;
-        }
+        java.util.regex.Matcher m = goalP.matcher(content);
+        while (m.find() && (fH + fA < expH + expA)) {
+            String rawName = m.group(1).trim();
+            String allMinutes = m.group(2);
+            
+            // Determiniamo la squadra cercando la squadra più vicina (prima o dopo)
+            String team = determineTeamUltra(content, m.start(), m.end(), home, away);
+            
+            // Pulizia del nome
+            String pName = cleanPlayerName(rawName, home, away);
 
-        // Estrazione Gol (Pattern 2)
-        java.util.regex.Matcher m2 = p2.matcher(content);
-        while (m2.find() && (fH < expH || fA < expA)) {
-            processMatch(m2, 1, 2, content, home, away, expH, expA, goals, cards, subs, processed);
-            fH = 0; fA = 0;
-            for (int i=0; i<goals.size(); i++) if (goals.get(i).path("team").path("name").asText().equals(home)) fH++; else fA++;
-        }
+            if (isValidPlayer(pName, home, away)) {
+                java.util.regex.Matcher minMatch = java.util.regex.Pattern.compile("(\\d+)").matcher(allMinutes);
+                while (minMatch.find()) {
+                    int minuteInt = Integer.parseInt(minMatch.group(1));
+                    String uniqueKey = minuteInt + "_" + pName.toLowerCase();
+                    
+                    if (localProcessed.add(uniqueKey)) {
+                        // Fallback se la ricerca ultra fallisce
+                        if (team == null) {
+                            if (fH < expH && fA >= expA) team = home;
+                            else if (fA < expA && fH >= expH) team = away;
+                        }
 
-        // Estrazione Gol (Pattern 3)
-        java.util.regex.Matcher m3 = p3.matcher(content);
-        while (m3.find() && (fH < expH || fA < expA)) {
-            processMatch(m3, 2, 1, content, home, away, expH, expA, goals, cards, subs, processed);
-            fH = 0; fA = 0;
-            for (int i=0; i<goals.size(); i++) if (goals.get(i).path("team").path("name").asText().equals(home)) fH++; else fA++;
-        }
-    }
-
-    private void processMatch(java.util.regex.Matcher m, int nameIdx, int minIdx, String content, String home, String away, int expH, int expA, ArrayNode goals, ArrayNode cards, ArrayNode subs, java.util.Set<String> processed) {
-        String pName = m.group(nameIdx).trim();
-        int min = Integer.parseInt(m.group(minIdx));
-        String fullMatch = m.group(0).toLowerCase();
-
-        if (!isValidPlayer(pName, home, away)) return;
-
-        int fH = 0, fA = 0;
-        for (int i=0; i<goals.size(); i++) if (goals.get(i).path("team").path("name").asText().equals(home)) fH++; else fA++;
-
-        String team = determineTeam(pName, content, m.start(), home, away, fH, expH, fA, expA);
-        if (team == null) return;
-
-        if (fullMatch.contains("gol") || fullMatch.contains("rete") || fullMatch.contains("segna") || (!fullMatch.contains("ammonizione") && !fullMatch.contains("sostituzione"))) {
-            if ((team.equals(home) && fH < expH) || (team.equals(away) && fA < expA)) {
-                if (processed.add("goal_" + pName + "_" + min)) {
-                    addGoal(goals, min, pName, team, fullMatch.contains("autorete") ? "OG" : "GOAL");
+                        if (team != null) {
+                            String snippet = content.substring(Math.max(0, m.start() - 40), Math.min(content.length(), m.end() + 20)).toLowerCase();
+                            boolean isPenalty = allMinutes.toLowerCase().contains("rig") || snippet.contains("rigore");
+                            
+                            addGoal(goals, minuteInt, pName, team, isPenalty ? "(P)" : "GOAL");
+                            if (team.equals(home)) fH++; else fA++;
+                        }
+                    }
                 }
             }
-        } else if (fullMatch.contains("ammonizione") || fullMatch.contains("espulsione") || fullMatch.contains("rosso") || fullMatch.contains("giallo")) {
-            if (processed.add("card_" + pName + "_" + min)) {
-                addCard(cards, min, pName, team, fullMatch.contains("rosso") ? "RED" : "YELLOW");
-            }
+        }
+        sortGoalsByMinute(goals);
+    }
+
+    private String cleanPlayerName(String name, String home, String away) {
+        String sH = simplify(home).toLowerCase();
+        String sA = simplify(away).toLowerCase();
+        return name.replaceAll("(?i)\\b(" + sH + "|" + sA + "|fc|ac|ssc|as|us|fine|inizio|gol|rete|ancora|lui|ago|inter|genoa|milan|juve|napoli|roma|lazio|atalanta|fiorentina|bologna|torino|verona|udinese|empoli|lecce|parma|venezia|cagliari|monza|como|cremonese)\\b", "").trim();
+    }
+
+    private String determineTeamUltra(String content, int start, int end, String home, String away) {
+        String sH = simplify(home).toLowerCase();
+        String sA = simplify(away).toLowerCase();
+        
+        // Cerchiamo nel raggio di 150 caratteri prima e dopo
+        String context = content.substring(Math.max(0, start - 150), Math.min(content.length(), end + 150)).toLowerCase();
+        
+        int lastH = context.lastIndexOf(sH, 150); // Cerca sH prima della metà dello snippet
+        int lastA = context.lastIndexOf(sA, 150);
+        
+        if (lastH != -1 && (lastA == -1 || lastH > lastA)) return home;
+        if (lastA != -1 && (lastH == -1 || lastA > lastH)) return away;
+        
+        // Se non trovato prima, cerca dopo
+        int nextH = context.indexOf(sH, 150);
+        int nextA = context.indexOf(sA, 150);
+        
+        if (nextH != -1 && (nextA == -1 || nextH < nextA)) return home;
+        if (nextA != -1 && (nextH == -1 || nextA < nextH)) return away;
+        
+        return null;
+    }
+
+    private void sortGoalsByMinute(ArrayNode goals) {
+        java.util.List<JsonNode> goalList = new java.util.ArrayList<>();
+        for (int i = 0; i < goals.size(); i++) {
+            goalList.add(goals.get(i));
+        }
+        
+        goalList.sort((a, b) -> Integer.compare(a.path("minute").asInt(), b.path("minute").asInt()));
+        
+        goals.removeAll();
+        for (JsonNode goal : goalList) {
+            goals.add(goal);
         }
     }
 
     private boolean isValidPlayer(String name, String home, String away) {
         String n = name.toLowerCase();
-        return n.length() >= 3 && !n.contains("voti") && !n.contains("pagelle") && 
-               !n.contains("cronaca") && !checkName(home, name) && !checkName(away, name);
+        // Evitiamo solo parole comuni della cronaca, non blocchiamo i nomi dei giocatori
+        return n.length() >= 3 && 
+               !n.contains("voti") && !n.contains("pagelle") && 
+               !n.contains("cronaca") && !n.contains("diretta") && 
+               !n.contains("tabellino") && !n.contains("sostituzione");
     }
 
     private String determineTeam(String player, String content, int matchStart, String home, String away, int fH, int eH, int fA, int eA) {
-        String snippet = content.substring(Math.max(0, matchStart - 100), Math.min(content.length(), matchStart + 100)).toLowerCase();
+        // Cerchiamo la squadra nel testo precedente (fino a 150 caratteri)
+        String before = content.substring(Math.max(0, matchStart - 150), matchStart).toLowerCase();
         String sHome = simplify(home);
         String sAway = simplify(away);
 
-        // Sky usa spesso frasi come "Napoli avanti" o "Gol Napoli" prima del marcatore
-        if (snippet.contains(sHome + " avanti") || snippet.contains("gol " + sHome) || snippet.contains(sHome + " in vantaggio")) return home;
-        if (snippet.contains(sAway + " avanti") || snippet.contains("gol " + sAway) || snippet.contains(sAway + " in vantaggio")) return away;
+        // Sky spesso scrive "Squadra: minuto Marcatore" o "Gol Squadra! minuto Marcatore"
+        int lastH = before.lastIndexOf(sHome);
+        int lastA = before.lastIndexOf(sAway);
 
-        // Fallback su ricerca nomi squadra
-        int hPos = snippet.lastIndexOf(sHome);
-        int aPos = snippet.lastIndexOf(sAway);
+        // Se una squadra è nominata molto più vicino al marcatore dell'altra, è quella giusta
+        if (lastH != -1 && (lastA == -1 || lastH > lastA)) return home;
+        if (lastA != -1 && (lastH == -1 || lastA > lastH)) return away;
 
-        if (hPos != -1 && (aPos == -1 || hPos > aPos)) return fH < eH ? home : null;
-        if (aPos != -1 && (hPos == -1 || aPos > hPos)) return fA < eA ? away : null;
+        // Se non troviamo nulla prima, guardiamo subito dopo (es: "Marcatore minuto (Squadra)")
+        String after = content.substring(matchStart, Math.min(content.length(), matchStart + 100)).toLowerCase();
+        int nextH = after.indexOf(sHome);
+        int nextA = after.indexOf(sAway);
 
-        return fH < eH ? home : (fA < eA ? away : null);
+        if (nextH != -1 && (nextA == -1 || nextH < nextA)) return home;
+        if (nextA != -1 && (nextH == -1 || nextA < nextH)) return away;
+
+        return null;
     }
 
     private void addGoal(ArrayNode goals, int minute, String playerName, String teamName, String type) {
